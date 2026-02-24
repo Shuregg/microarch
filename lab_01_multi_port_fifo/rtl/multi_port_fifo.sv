@@ -4,7 +4,7 @@ module multi_port_fifo#(
 ) (
 
     input  logic clk,
-    input logic rst_n,
+    input  logic rst_n,
 
     // AXI-Stream Master
     input  logic [WORD_WIDTH * 2 - 1 : 0] data_i,
@@ -81,12 +81,12 @@ module multi_port_fifo#(
     assign ready_o = (!is_full_ch0 && !is_full_ch1) || fifo_is_freeing_up;
     assign fifo_we = valid_i && ready_o;
 
-    assert(w_ptr_ff < FIFO_DEPTH)
+    assert property(@(posedge clk) w_ptr_ff < FIFO_DEPTH)
     else $error("w_ptr_ff BEQ FIFO_DEPTH: %0d >= %0d", w_ptr_ff, FIFO_DEPTH);
 
-    assert(data_cnt_ch0_ff <= FIFO_DEPTH)
+    assert property(@(posedge clk) data_cnt_ch0_ff <= FIFO_DEPTH)
     else $error("data_cnt_ch0_ff Bigger than FIFO_DEPTH: %0d > %0d", data_cnt_ch0_ff, FIFO_DEPTH);
-    assert(data_cnt_ch1_ff <= FIFO_DEPTH)
+    assert property(@(posedge clk) data_cnt_ch1_ff <= FIFO_DEPTH)
     else $error("data_cnt_ch1_ff Bigger than FIFO_DEPTH: %0d > %0d", data_cnt_ch1_ff, FIFO_DEPTH);
 
     
@@ -123,31 +123,36 @@ module multi_port_fifo#(
 
     assign user_o = read_priority_ff;
 
-    assert(r_ptr_ch0_ff < FIFO_DEPTH)
+    assert property(@(posedge clk) r_ptr_ch0_ff < FIFO_DEPTH)
     else $error("r_ptr_ch0_ff BEQ FIFO_DEPTH: %0d >= %0d", r_ptr_ch0_ff, FIFO_DEPTH);
 
-    assert(r_ptr_ch1_ff < FIFO_DEPTH)
+    assert property(@(posedge clk) r_ptr_ch1_ff < FIFO_DEPTH)
     else $error("r_ptr_ch1_ff BEQ FIFO_DEPTH: %0d >= %0d", r_ptr_ch1_ff, FIFO_DEPTH);
 
-    assert(read_priority_ff !== 2'b11)
+    assert property(@(posedge clk) read_priority_ff !== 2'b11)
     else $error("read_priority_ff (user_o) == 2'b11!");
+
+    assign fifo_re_ch0 = !is_empty_ch0 && ready_ch0_i && (read_priority_ff[0]);
+    assign fifo_re_ch1 = !is_empty_ch1 && ready_ch1_i && (read_priority_ff[1] || fifo_re_ch0);
+    // Additional condition for parallel                                      ^            ^
+    // reading from both channels                                             |____________|
 
     assign fifo_r_op_ch0 = !is_empty_ch0 && ready_ch0_i && valid_ch0_o;
     assign fifo_r_op_ch1 = !is_empty_ch1 && ready_ch1_i && valid_ch1_o;
 
-    assert(fifo_r_op_ch0 && !is_empty_ch1);
+    assert property(@(posedge clk) !(!is_empty_ch0 && is_empty_ch1))
     else $error("Channel 0 is not empty but channel 1 is. How is it possible?");
 
     // Channel 1 always contains newer data than channel 0 (due to specification);
     // FIFO can be written when it is not full and both channels contain same number of unreaded values.
     // assign fifo_is_freeing_up = fifo_re_ch1;
-    assign fifo_is_freeing_up = fifo_r_op_ch1;
+    assign fifo_is_freeing_up = fifo_re_ch1;
 
     // ------------------------------
     // -- Channel 0
     // ------------------------------
 
-    assign valid_ch0_next = !is_empty_ch0;
+    assign valid_ch0_next = fifo_re_ch0;
     always_ff @(posedge clk) begin : ch0_valid_logic
         if(!rst_n)
             valid_ch0_ff <= 1'b0;
@@ -162,7 +167,7 @@ module multi_port_fifo#(
             else
                 r_ptr_ch0_next = r_ptr_ch0_ff + 1;
         end else begin
-            r_ptr_ch0_next = r_ptr_ch0_ff
+            r_ptr_ch0_next = r_ptr_ch0_ff;
         end
     end
     always_ff @(posedge clk) begin
@@ -172,7 +177,17 @@ module multi_port_fifo#(
             r_ptr_ch0_ff <= r_ptr_ch0_next;
     end
 
-    assign read_priority_next[0] = (valid_ch0_ff && ready_ch0_i) ? ~read_priority_ff[0] : read_priority_ff[0];
+    always_comb begin
+        if(valid_ch0_ff && ready_ch0_i) begin
+            if(valid_ch1_ff && ready_ch1_i) begin
+                read_priority_next[0] = read_priority_ff[0];
+            end else begin
+                read_priority_next[0] = ~read_priority_ff[0];
+            end
+        end else begin
+            read_priority_next[0] = read_priority_ff[0];
+        end
+    end
     always_ff @(posedge clk) begin : ch0_read_logic
         if(!rst_n) begin
             data_ch0_ff         <= '0;
@@ -207,7 +222,7 @@ module multi_port_fifo#(
     // -- Channel 1
     // ------------------------------
 
-    assign valid_ch1_next = !is_empty_ch1;
+    assign valid_ch1_next = fifo_re_ch1;
     always_ff @(posedge clk) begin : ch1_valid_logic
         if(!rst_n)
             valid_ch1_ff <= 1'b0;
@@ -222,7 +237,7 @@ module multi_port_fifo#(
             else
                 r_ptr_ch1_next = r_ptr_ch1_ff + 1;
         end else begin
-            r_ptr_ch1_next = r_ptr_ch1_ff
+            r_ptr_ch1_next = r_ptr_ch1_ff;
         end
     end
     always_ff @(posedge clk) begin
@@ -232,7 +247,17 @@ module multi_port_fifo#(
             r_ptr_ch1_ff <= r_ptr_ch1_next;
     end
 
-    assign read_priority_next[1] = (valid_ch1_ff && ready_ch1_i) ? ~read_priority_ff[1] : read_priority_ff[1];
+    always_comb begin
+        if(valid_ch1_ff && ready_ch1_i) begin
+            if(valid_ch0_ff && ready_ch0_i) begin
+                read_priority_next[1] = read_priority_ff[1];
+            end else begin
+                read_priority_next[1] = ~read_priority_ff[1];
+            end
+        end else begin
+            read_priority_next[1] = read_priority_ff[1];
+        end
+    end
     always_ff @(posedge clk) begin : ch1_read_logic
         if(!rst_n) begin
             data_ch1_ff         <= '0;
@@ -263,3 +288,4 @@ module multi_port_fifo#(
             data_cnt_ch1_ff <= data_cnt_ch1_next;
     end
 endmodule : fifo_fwft
+
