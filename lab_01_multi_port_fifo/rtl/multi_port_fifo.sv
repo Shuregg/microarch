@@ -59,7 +59,6 @@ module multi_port_fifo#(
     logic fifo_r_op_ch0;
     logic fifo_r_op_ch1;
 
-
     logic [WORD_WIDTH-1 : 0] data_ch0_ff;
     logic [WORD_WIDTH-1 : 0] data_ch1_ff;
 
@@ -81,14 +80,19 @@ module multi_port_fifo#(
     assign ready_o = (!is_full_ch0 && !is_full_ch1) || fifo_is_freeing_up;
     assign fifo_we = valid_i && ready_o;
 
-    assert property(@(posedge clk) w_ptr_ff < FIFO_DEPTH)
-    else $error("w_ptr_ff BEQ FIFO_DEPTH: %0d >= %0d", w_ptr_ff, FIFO_DEPTH);
+    assert property(
+        @(posedge clk) disable iff (!rst_n)
+        w_ptr_ff < FIFO_DEPTH
+    ) else $error("w_ptr_ff BEQ FIFO_DEPTH: %0d >= %0d", w_ptr_ff, FIFO_DEPTH);
 
-    assert property(@(posedge clk) data_cnt_ch0_ff <= FIFO_DEPTH)
-    else $error("data_cnt_ch0_ff Bigger than FIFO_DEPTH: %0d > %0d", data_cnt_ch0_ff, FIFO_DEPTH);
-    assert property(@(posedge clk) data_cnt_ch1_ff <= FIFO_DEPTH)
-    else $error("data_cnt_ch1_ff Bigger than FIFO_DEPTH: %0d > %0d", data_cnt_ch1_ff, FIFO_DEPTH);
-
+    assert property(
+        @(posedge clk) disable iff (!rst_n)
+        data_cnt_ch0_ff <= FIFO_DEPTH
+    ) else $error("data_cnt_ch0_ff Bigger than FIFO_DEPTH: %0d > %0d", data_cnt_ch0_ff, FIFO_DEPTH);
+    assert property(
+        @(posedge clk) disable iff (!rst_n)
+        data_cnt_ch1_ff <= FIFO_DEPTH
+    ) else $error("data_cnt_ch1_ff Bigger than FIFO_DEPTH: %0d > %0d", data_cnt_ch1_ff, FIFO_DEPTH);
     
     always_ff @(posedge clk) begin : write_logic
         if(!rst_n) begin
@@ -123,25 +127,33 @@ module multi_port_fifo#(
 
     assign user_o = read_priority_ff;
 
-    assert property(@(posedge clk) r_ptr_ch0_ff < FIFO_DEPTH)
-    else $error("r_ptr_ch0_ff BEQ FIFO_DEPTH: %0d >= %0d", r_ptr_ch0_ff, FIFO_DEPTH);
+    assert property(
+        @(posedge clk) disable iff (!rst_n)
+        r_ptr_ch0_ff < FIFO_DEPTH
+    ) else $error("r_ptr_ch0_ff BEQ FIFO_DEPTH: %0d >= %0d", r_ptr_ch0_ff, FIFO_DEPTH);
 
-    assert property(@(posedge clk) r_ptr_ch1_ff < FIFO_DEPTH)
-    else $error("r_ptr_ch1_ff BEQ FIFO_DEPTH: %0d >= %0d", r_ptr_ch1_ff, FIFO_DEPTH);
+    assert property(
+        @(posedge clk) disable iff (!rst_n)
+        r_ptr_ch1_ff < FIFO_DEPTH
+    ) else $error("r_ptr_ch1_ff BEQ FIFO_DEPTH: %0d >= %0d", r_ptr_ch1_ff, FIFO_DEPTH);
 
-    assert property(@(posedge clk) read_priority_ff !== 2'b11)
-    else $error("read_priority_ff (user_o) == 2'b11!");
+    assert property(
+        @(posedge clk) disable iff (!rst_n)
+        read_priority_ff !== 2'b11
+    ) else $error("read_priority_ff (user_o) == 2'b11!");
 
     assign fifo_re_ch0 = !is_empty_ch0 && ready_ch0_i && (read_priority_ff[0]);
     assign fifo_re_ch1 = !is_empty_ch1 && ready_ch1_i && (read_priority_ff[1] || fifo_re_ch0);
-    // Additional condition for parallel                                      ^            ^
-    // reading from both channels                                             |____________|
+    // Additional condition for parallel                                       ^            ^
+    // reading from both channels                                              |____________|
 
     assign fifo_r_op_ch0 = !is_empty_ch0 && ready_ch0_i && valid_ch0_o;
     assign fifo_r_op_ch1 = !is_empty_ch1 && ready_ch1_i && valid_ch1_o;
 
-    assert property(@(posedge clk) !(!is_empty_ch0 && is_empty_ch1))
-    else $error("Channel 0 is not empty but channel 1 is. How is it possible?");
+    assert property(
+        @(posedge clk) disable iff (!rst_n)
+        !(!is_empty_ch0 && is_empty_ch1)
+    ) else $error("Channel 0 is not empty but channel 1 is. How is it possible?");
 
     // Channel 1 always contains newer data than channel 0 (due to specification);
     // FIFO can be written when it is not full and both channels contain same number of unreaded values.
@@ -201,12 +213,12 @@ module multi_port_fifo#(
     always_comb begin
         if(valid_ch0_ff && ready_ch0_i) begin
             if(!fifo_we)
-                data_cnt_ch0_next = data_cnt_ch0_ff - 1;
+                data_cnt_ch0_next = is_empty_ch0 ? data_cnt_ch0_ff : data_cnt_ch0_ff - 1;
             else
                 data_cnt_ch0_next = data_cnt_ch0_ff;
         end else begin
             if(fifo_we)
-                data_cnt_ch0_next = data_cnt_ch0_ff + 1;
+                data_cnt_ch0_next = is_full_ch0 ? data_cnt_ch0_ff : data_cnt_ch0_ff + 1;
             else
                 data_cnt_ch0_next = data_cnt_ch0_ff;
         end
@@ -271,12 +283,12 @@ module multi_port_fifo#(
     always_comb begin
         if(valid_ch1_ff && ready_ch1_i) begin
             if(!fifo_we)
-                data_cnt_ch1_next = data_cnt_ch1_ff - 1;
+                data_cnt_ch1_next = is_empty_ch1 ? data_cnt_ch1_ff : data_cnt_ch1_ff - 1;
             else
                 data_cnt_ch1_next = data_cnt_ch1_ff;
         end else begin
             if(fifo_we)
-                data_cnt_ch1_next = data_cnt_ch1_ff + 1;
+                data_cnt_ch1_next = is_full_ch1 ? data_cnt_ch1_ff : data_cnt_ch1_ff + 1;
             else
                 data_cnt_ch1_next = data_cnt_ch1_ff;
         end
@@ -287,5 +299,4 @@ module multi_port_fifo#(
         else
             data_cnt_ch1_ff <= data_cnt_ch1_next;
     end
-endmodule : fifo_fwft
-
+endmodule : multi_port_fifo
