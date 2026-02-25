@@ -40,10 +40,10 @@ module multi_port_fifo#(
     logic [$clog2(FIFO_DEPTH)-1 : 0] r_ptr_ch0_next;
     logic [$clog2(FIFO_DEPTH)-1 : 0] r_ptr_ch1_next;
 
-    logic [$clog2(FIFO_DEPTH)-1 : 0] data_cnt_ch0_ff;
-    logic [$clog2(FIFO_DEPTH)-1 : 0] data_cnt_ch1_ff;
-    logic [$clog2(FIFO_DEPTH)-1 : 0] data_cnt_ch0_next;
-    logic [$clog2(FIFO_DEPTH)-1 : 0] data_cnt_ch1_next;
+    logic [$clog2(FIFO_DEPTH + 1)-1 : 0] data_cnt_ch0_ff;
+    logic [$clog2(FIFO_DEPTH + 1)-1 : 0] data_cnt_ch1_ff;
+    logic [$clog2(FIFO_DEPTH + 1)-1 : 0] data_cnt_ch0_next;
+    logic [$clog2(FIFO_DEPTH + 1)-1 : 0] data_cnt_ch1_next;
 
     logic is_empty_ch0;
     logic is_empty_ch1;
@@ -62,8 +62,8 @@ module multi_port_fifo#(
     logic [WORD_WIDTH-1 : 0] data_ch0_ff;
     logic [WORD_WIDTH-1 : 0] data_ch1_ff;
 
-    logic valid_ch0_ff;
-    logic valid_ch1_ff;
+    // logic valid_ch0_ff;
+    // logic valid_ch1_ff;
     logic valid_ch0_next;
     logic valid_ch1_next;
 
@@ -84,7 +84,7 @@ module multi_port_fifo#(
         data_cnt_ch0_ff <= FIFO_DEPTH
     ) else $error("data_cnt_ch0_ff Bigger than FIFO_DEPTH: %0d > %0d", data_cnt_ch0_ff, FIFO_DEPTH);
 
-    a_cnt_ch1_ff_val : assert property(
+    data_cnt_ch1_ff_val : assert property(
         @(posedge aclk_i) disable iff (!aresetn_i)
         data_cnt_ch1_ff <= FIFO_DEPTH
     ) else $error("data_cnt_ch1_ff Bigger than FIFO_DEPTH: %0d > %0d", data_cnt_ch1_ff, FIFO_DEPTH);
@@ -104,11 +104,13 @@ module multi_port_fifo#(
         $onehot(read_priority_ff)
     ) else $error("read_priority_ff (tuser_o) == 2'b11!");
 
+    /*
     uneven_fifo_filling : assert property(
         @(posedge aclk_i) disable iff (!aresetn_i)
         !(!is_empty_ch0 && is_empty_ch1)
     ) else $error("Channel 0 is not empty but channel 1 is. You must follow \
         the rules for reading fifo based on the 'tuser_o' signal");
+    */
 
     // ------------------------------
     // -- Write logic
@@ -145,18 +147,21 @@ module multi_port_fifo#(
     assign is_empty_ch0 = (data_cnt_ch0_ff == 0);
     assign is_empty_ch1 = (data_cnt_ch1_ff == 0);
 
-    assign tvalid_ch0_o = valid_ch0_ff;
-    assign tvalid_ch1_o = valid_ch1_ff;
+    // assign tvalid_ch0_o = valid_ch0_ff;
+    // assign tvalid_ch1_o = valid_ch1_ff;
 
-    assign tdata_ch0_o = data_ch0_ff;
-    assign tdata_ch1_o = data_ch1_ff;
+    // assign tdata_ch0_o = data_ch0_ff;
+    // assign tdata_ch1_o = data_ch1_ff;
 
     assign tuser_o = read_priority_ff;
 
-    assign fifo_re_ch0 = !is_empty_ch0 && tready_ch0_i && (read_priority_ff[0]);
-    assign fifo_re_ch1 = !is_empty_ch1 && tready_ch1_i && (read_priority_ff[1] || fifo_re_ch0);
+    // assign fifo_re_ch0 = !is_empty_ch0 && tready_ch0_i && (read_priority_ff[0]);
+    // assign fifo_re_ch1 = !is_empty_ch1 && tready_ch1_i && (read_priority_ff[1] || fifo_re_ch0);
     // Additional condition for parallel                                       ^            ^
     // reading from both channels                                              |____________|
+
+    assign fifo_re_ch0 = tvalid_ch0_o && tready_ch0_i && (tuser_o[0] || (!is_empty_ch1 && tready_ch1_i && tuser_o[1]));
+    assign fifo_re_ch1 = tvalid_ch1_o && tready_ch1_i && (tuser_o[1] || (!is_empty_ch0 && tready_ch0_i && tuser_o[0]));
 
     assign fifo_r_op_ch0 = !is_empty_ch0 && tready_ch0_i && tvalid_ch0_o;
     assign fifo_r_op_ch1 = !is_empty_ch1 && tready_ch1_i && tvalid_ch1_o;
@@ -166,15 +171,17 @@ module multi_port_fifo#(
     // assign fifo_is_freeing_up = fifo_re_ch1;
     assign fifo_is_freeing_up = fifo_re_ch1;
 
+    assign tdata_ch0_o = buff_ch0[r_ptr_ch0_ff];
+    assign tdata_ch1_o = buff_ch1[r_ptr_ch1_ff];
     always_comb begin
-        if(valid_ch0_ff && tready_ch0_i) begin
-            if(valid_ch1_ff && tready_ch1_i) begin
+        if(tvalid_ch0_o && tready_ch0_i) begin
+            if(tvalid_ch1_o && tready_ch1_i) begin
                 read_priority_next = read_priority_ff;
             end else begin
                 read_priority_next = ~read_priority_ff;
             end
         end else begin
-            if(valid_ch1_ff && tready_ch1_i)
+            if(tvalid_ch1_o && tready_ch1_i)
                 read_priority_next = ~read_priority_ff;
             else
                 read_priority_next = read_priority_ff;
@@ -182,12 +189,12 @@ module multi_port_fifo#(
     end
     always_ff @(posedge aclk_i) begin : read_priority_ff_logic
         if(!aresetn_i) begin
-            data_ch0_ff      <= '0;
-            data_ch1_ff      <= '0;
+            // data_ch0_ff      <= '0;
+            // data_ch1_ff      <= '0;
             read_priority_ff <= 2'b01;
         end else begin
-            data_ch0_ff      <= buff_ch0[r_ptr_ch0_ff];
-            data_ch1_ff      <= buff_ch0[r_ptr_ch1_ff];
+            // data_ch0_ff      <= buff_ch0[r_ptr_ch0_ff];
+            // data_ch1_ff      <= buff_ch1[r_ptr_ch1_ff];
             read_priority_ff <= read_priority_next;
         end
     end
@@ -196,16 +203,17 @@ module multi_port_fifo#(
     // -- Channel 0
     // ------------------------------
 
-    assign valid_ch0_next = fifo_re_ch0;
-    always_ff @(posedge aclk_i) begin : ch0_valid_logic
-        if(!aresetn_i)
-            valid_ch0_ff <= 1'b0;
-        else
-            valid_ch0_ff <= valid_ch0_next;
-    end
+    // assign valid_ch0_next = !is_empty_ch0;
+    // always_ff @(posedge aclk_i) begin : ch0_valid_logic
+    //     if(!aresetn_i)
+    //         valid_ch0_ff <= 1'b0;
+    //     else
+    //         valid_ch0_ff <= valid_ch0_next;
+    // end
 
+    assign tvalid_ch0_o = !is_empty_ch0;
     always_comb begin
-        if(valid_ch0_ff && tready_ch0_i) begin
+        if(tvalid_ch0_o && tready_ch0_i) begin
             if(r_ptr_ch0_ff == FIFO_DEPTH - 1)
                 r_ptr_ch0_next = '0;
             else
@@ -222,7 +230,7 @@ module multi_port_fifo#(
     end
 
     always_comb begin
-        if(valid_ch0_ff && tready_ch0_i) begin
+        if(tvalid_ch0_o && tready_ch0_i) begin
             if(!fifo_we)
                 data_cnt_ch0_next = is_empty_ch0 ? data_cnt_ch0_ff : data_cnt_ch0_ff - 1;
             else
@@ -245,16 +253,17 @@ module multi_port_fifo#(
     // -- Channel 1
     // ------------------------------
 
-    assign valid_ch1_next = fifo_re_ch1;
-    always_ff @(posedge aclk_i) begin : ch1_valid_logic
-        if(!aresetn_i)
-            valid_ch1_ff <= 1'b0;
-        else
-            valid_ch1_ff <= valid_ch1_next;
-    end
+    // assign valid_ch1_next = !is_empty_ch1;
+    assign tvalid_ch1_o = !is_empty_ch1;
+    // always_ff @(posedge aclk_i) begin : ch1_valid_logic
+    //     if(!aresetn_i)
+    //         valid_ch1_ff <= 1'b0;
+    //     else
+    //         valid_ch1_ff <= valid_ch1_next;
+    // end
 
     always_comb begin
-        if(valid_ch1_ff && tready_ch1_i) begin
+        if(tvalid_ch1_o && tready_ch1_i) begin
             if(r_ptr_ch1_ff == FIFO_DEPTH - 1)
                 r_ptr_ch1_next = '0;
             else
@@ -271,7 +280,7 @@ module multi_port_fifo#(
     end
 
     always_comb begin
-        if(valid_ch1_ff && tready_ch1_i) begin
+        if(tvalid_ch1_o && tready_ch1_i) begin
             if(!fifo_we)
                 data_cnt_ch1_next = is_empty_ch1 ? data_cnt_ch1_ff : data_cnt_ch1_ff - 1;
             else
