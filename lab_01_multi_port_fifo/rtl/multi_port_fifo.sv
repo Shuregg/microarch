@@ -47,13 +47,9 @@ module multi_port_fifo#(
 
     logic is_empty_ch0;
     logic is_empty_ch1;
-    logic is_almost_empty_ch0;
-    logic is_almost_empty_ch1;
 
     logic is_full_ch0;
     logic is_full_ch1;
-    logic is_almost_full_ch0;
-    logic is_almost_full_ch1;
     logic is_both_full;
 
     // Onehot read priority
@@ -113,16 +109,11 @@ module multi_port_fifo#(
 
     assign is_both_full = is_full_ch0 && is_full_ch1;
 
-    assign is_almost_full_ch0 = (data_cnt_ch0_ff == FIFO_DEPTH - 1);
-    assign is_almost_full_ch1 = (data_cnt_ch1_ff == FIFO_DEPTH - 1);
-
     assign tready_o = (!is_full_ch0 && !is_full_ch1) || fifo_is_freeing_up;
     assign fifo_we = tvalid_i && tready_o;
 
     always_ff @(posedge aclk_i) begin : write_logic
         if(!aresetn_i) begin
-            buff_ch0 <= '0;
-            buff_ch1 <= '0;
             w_ptr_ff <= '0;
         end else if(fifo_we) begin
             {buff_ch1[w_ptr_ff], buff_ch0[w_ptr_ff]} <= tdata_i;
@@ -143,9 +134,6 @@ module multi_port_fifo#(
 
     assign is_empty_ch0 = (data_cnt_ch0_ff == 0);
     assign is_empty_ch1 = (data_cnt_ch1_ff == 0);
-
-    assign is_almost_empty_ch0 = (data_cnt_ch0_ff == 1);
-    assign is_almost_empty_ch1 = (data_cnt_ch1_ff == 1);
 
     assign tuser_o = read_priority_ff;
 
