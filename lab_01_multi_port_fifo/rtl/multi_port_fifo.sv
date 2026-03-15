@@ -29,8 +29,13 @@ module multi_port_fifo#(
     // -- Local Signals Declaration
     // ------------------------------
 
+    `ifdef DUAL_PORT_RAM
+    logic [WORD_WIDTH-1 : 0] buff_ch0 [FIFO_DEPTH-1 : 0];
+    logic [WORD_WIDTH-1 : 0] buff_ch1 [FIFO_DEPTH-1 : 0];
+    `else
     logic [FIFO_DEPTH-1 : 0][WORD_WIDTH-1 : 0] buff_ch0;
     logic [FIFO_DEPTH-1 : 0][WORD_WIDTH-1 : 0] buff_ch1;
+    `endif
 
     logic [$clog2(FIFO_DEPTH)-1 : 0] w_ptr_ff;
     logic [$clog2(FIFO_DEPTH)-1 : 0] r_ptr_ch0_ff;
