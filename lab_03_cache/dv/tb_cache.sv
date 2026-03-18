@@ -1,10 +1,22 @@
+`include "cache_if.sv"
+
 module tb_cache();
 
     `define STRINGIFY(DEFINE) `"DEFINE`"
 
-    parameter  CLK_PERIOD        = 1;
-    parameter  SETS              = 8;
-    parameter  WAYS              = 1;
+    parameter  CLK_PERIOD = 1;
+
+    `ifdef DIRECT_MAPPED_CACHE
+        parameter  SETS = 8;
+        parameter  WAYS = 1;
+    `elsif FOUR_WAY_SET_ASSOCIATIVE_CACHE
+        parameter  SETS = 2;
+        parameter  WAYS = 4;
+    `elsif FULLY_ASSOCIATIVE_CACHE
+        parameter  SETS = 1;
+        parameter  WAYS = 8;
+    `endif
+
     parameter  ADDR_WIDTH        = 32;
     parameter  DATA_WIDTH        = 32;
     parameter  BYTE_OFFSET_WIDTH = 2;
@@ -23,20 +35,14 @@ module tb_cache();
     } set_t;
 
 
-    // Interface signals
-    logic clk;
-    logic rstn;
-    logic [ADDR_WIDTH_CUT - 1 : 0] addr_cut;
-    logic [DATA_WIDTH     - 1 : 0] data;
-    logic hit_valid;
-    logic hit;
-
     // TB variables
     set_t expeced_cells[CELL_AMOUNT];
 
     int unsigned error_cnt = 0;
     bit          is_hit_valid_timeout = 0;
 
+    logic                      clk;
+    logic                      rstn;
     logic                      valid;
     logic [TAG_WIDTH  - 1 : 0] tag;
     logic [SET_WIDTH  - 1 : 0] set;
@@ -49,18 +55,27 @@ module tb_cache();
 
     mem_list_gen #(TAG_WIDTH, DATA_WIDTH, CELL_AMOUNT) mem_list_gen_h;
 
+    // Interface signals
+    cache_if #(ADDR_WIDTH_CUT, DATA_WIDTH) cache_if_h (
+        .clk  (clk),
+        .rstn (rstn)
+    );
+
+    virtual cache_if #(ADDR_WIDTH_CUT, DATA_WIDTH) cache_vif_h;
+
+    // DUT
     cache #(
-        .SETS        (8),
-        .WAYS        (1),
+        .SETS        (SETS),
+        .WAYS        (WAYS),
         .DATA_WIDTH  (DATA_WIDTH),
         .ADDR_WIDTH  (ADDR_WIDTH_CUT)
-    ) u_direct_mapped_cache (
+    ) u_cache (
         .clk_i       (clk),
         .rstn_i      (rstn),
-        .addr_i      (addr_cut),
-        .data_o      (data),
-        .hit_valid_o (hit_valid),
-        .hit_o       (hit)
+        .addr_i      (cache_if_h.addr),
+        .data_o      (cache_if_h.data),
+        .hit_valid_o (cache_if_h.hit_valid),
+        .hit_o       (cache_if_h.hit)
     );
 
     task automatic reset_gen();
@@ -69,7 +84,7 @@ module tb_cache();
         rstn <= 1'b1;
     endtask : reset_gen
 
-    task automatic check_cache(
+    task automatic compare_hit_and_data(
         logic                      hit_rec,
         logic                      hit_exp,
         logic [DATA_WIDTH - 1 : 0] data_rec,
@@ -93,53 +108,128 @@ module tb_cache();
             $error("[%0t] Wrong 'hit_o' value. Received = %0b, expected = %0b. (#%0d)",
                 $time(), hit_rec, hit_exp, error_cnt);
        end
-    endtask : check_cache
+    endtask : compare_hit_and_data
+
+    task automatic check_cache_hit();
+        for(int unsigned i = 0; i < SETS; i++) begin
+            for(int unsigned j = 0; j < WAYS; j++) begin
+                int unsigned idx = (i * WAYS + j);
+                $display("");
+                set      = i;
+                tag      = expeced_cells[idx].tag;
+                data_exp = expeced_cells[idx].data;
+                valid    = expeced_cells[idx].valid;
+                hit_exp  = valid;
+
+                if(SETS != 1)
+                    cache_vif_h.addr <= {tag, set};
+                else
+                    cache_vif_h.addr <= tag;
+
+                @(posedge cache_vif_h.clk);
+                is_hit_valid_timeout = 0;
+                fork
+                    fork
+                        wait(cache_vif_h.hit_valid === 1'b1);
+                        #(4 * CLK_PERIOD) is_hit_valid_timeout = 1;
+                    join_any
+                    disable fork;
+                join
+
+                @(negedge cache_vif_h.clk);
+                hit_rec  = cache_vif_h.hit;
+                data_rec = cache_vif_h.data;
+
+                if(is_hit_valid_timeout) begin
+                    error_cnt++;
+                    $error("[%0t] Cannot wait for high value of 'hit_valid_o'. Received: %0b. (#%0d)",
+                        $time(), cache_vif_h.hit_valid, error_cnt);
+                end else begin
+                    compare_hit_and_data(hit_rec, hit_exp, data_rec, data_exp);
+                end
+            end
+        end
+    endtask : check_cache_hit
+
+   task automatic check_cache_miss(int unsigned checks = 10);
+        for(int unsigned set = 0; set < SETS; set++) begin
+            for(int i = 0; i < checks; i++) begin
+                $display("");
+                rand_tag : assert(std::randomize(tag));
+                hit_exp = 0;
+                for(int j = 0; j < CELL_AMOUNT; j++) begin
+                    logic [TAG_WIDTH  - 1 : 0] set_tmp = i;
+                    logic [DATA_WIDTH - 1 : 0] tag_tmp = expeced_cells[j].tag;
+                    logic [SET_WIDTH  - 1 : 0] dat_tmp = expeced_cells[j].data;
+                    if((tag === tag_tmp) && (j / WAYS == set)) begin
+                        hit_exp = 1;
+                        data_exp = dat_tmp;
+                        break;
+                    end else begin
+                        hit_exp = 0;
+                    end
+                end
+
+                cache_vif_h.addr <= {tag, set};
+                @(posedge cache_vif_h.clk);
+
+                is_hit_valid_timeout = 0;
+                fork
+                    fork
+                        wait(cache_vif_h.hit_valid === 1'b1);
+                        #(4 * CLK_PERIOD) is_hit_valid_timeout = 1;
+                    join_any
+                    disable fork;
+                join
+
+                @(negedge cache_vif_h.clk);
+                hit_rec  = cache_vif_h.hit;
+                data_rec = cache_vif_h.data;
+
+                if(is_hit_valid_timeout) begin
+                    error_cnt++;
+                    $error("[%0t] Cannot wait for high value of 'hit_valid_o'. Received: %0b. (#%0d)",
+                        $time(), cache_vif_h.hit_valid, error_cnt);
+                end else begin
+                    compare_hit_and_data(hit_rec, hit_exp, data_rec, data_exp);
+                end
+                if(hit_exp)
+                    checks++; // Because we want to check cache misses
+            end
+        end
+    endtask : check_cache_miss
 
     initial begin : main_tb_proc
+        // Connect interface
+        cache_vif_h = cache_if_h;
+
+        cache_vif_h.addr <= 0;
+
+        // Generate cache initialization file
         mem_list_gen_h = new();
         assert(mem_list_gen_h.generate_file(cache_ini_file, "%h", 1));
         mem_list_gen_h.get_generated_cells(expeced_cells);
-        $readmemh(cache_ini_file, u_direct_mapped_cache.sram);
 
-        @(negedge rstn);
-        @(posedge rstn);
-        repeat(2) @(posedge clk);
-        
-        for(int unsigned i = 0; i < SETS; i++) begin
-            $display("");
-            set      = i;
-            tag      = expeced_cells[i].tag;
-            data_exp = expeced_cells[i].data;
-            valid    = expeced_cells[i].valid;
-            hit_exp  = valid;
-            addr_cut <= {tag, set};
+        // Initialize cache memory
+        $readmemh(cache_ini_file, u_cache.sram);
 
-            @(posedge clk);
-            is_hit_valid_timeout = 0;
-            fork
-                fork
-                    wait(hit_valid === 1'b1);
-                    #(2 * CLK_PERIOD) is_hit_valid_timeout = 1;
-                join_any
-                disable fork;
-            join
+        // Wait for reset done
+        @(negedge cache_vif_h.rstn);
+        @(posedge cache_vif_h.rstn);
+        repeat(2) @(posedge cache_vif_h.clk);
 
-            @(negedge clk);
-            hit_rec  = hit;
-            data_rec = data;
+        // Start checks
+        check_cache_hit();
+        check_cache_miss();
 
-            if(is_hit_valid_timeout) begin
-                error_cnt++;
-                $error("[%0t] Cannot wait for high value of 'hit_valid_o'. Received: %0b. (#%0d)",
-                    $time(), hit_valid, error_cnt);
-            end else begin
-               check_cache(hit_rec, hit_exp, data_rec, data_exp);
-            end
-        end
-
+        // Some drain time
         repeat(10)
-            @(posedge clk);
-        $display("");
+            @(posedge cache_vif_h.clk);
+
+        if(error_cnt)
+            $display("\n\t\tTEST FAILED! (error counter = %0d)\n", error_cnt);
+        else
+            $display("\n\t\tTEST PASSED!\n");
         $finish();
     end
 
@@ -155,3 +245,4 @@ module tb_cache();
     end
 
 endmodule : tb_cache
+
