@@ -16,8 +16,8 @@ module cache #(
     // -- Local parameters
     // ------------------------------------------------------------------------
 
-    localparam SET_FIELD_WIDTH = $clog2(SETS);
-    localparam TAG_FIELD_WIDTH = ADDR_WIDTH - SET_FIELD_WIDTH;
+    localparam SET_FIELD_WIDTH = SETS != 1 ? $clog2(SETS) : 1;
+    localparam TAG_FIELD_WIDTH = SETS != 1 ? ADDR_WIDTH - SET_FIELD_WIDTH : ADDR_WIDTH;
 
     // ------------------------------------------------------------------------
     // -- Quality checks
@@ -29,14 +29,28 @@ module cache #(
     ways_param_range : assert property(@(posedge clk_i) WAYS >= 1 && TAG_FIELD_WIDTH <= ADDR_WIDTH)
     else $error("Wrong 'WAYS' parameter value (%0d). It must be in range [1 : %0d]", WAYS, 2 ** ADDR_WIDTH);
 
-    set_tag_width_sum : assert property(@(posedge clk_i) SET_FIELD_WIDTH + TAG_FIELD_WIDTH == ADDR_WIDTH)
+    set_tag_width_sum : assert property(
+        @(posedge clk_i) disable iff(SETS == 1) 
+        SET_FIELD_WIDTH + TAG_FIELD_WIDTH == ADDR_WIDTH)
     else $error("The sum of 'tag' and 'set' widths (%0d) is not equal to 'ADDR_WIDTH' parameter value (%0d).",
         SET_FIELD_WIDTH + TAG_FIELD_WIDTH, ADDR_WIDTH);
 
+    set_tag_width_sum_sets_1 : assert property(
+        @(posedge clk_i) disable iff(SETS != 1) 
+        TAG_FIELD_WIDTH == ADDR_WIDTH && SET_FIELD_WIDTH == 1)
+    else $error("The 'tag' widths (%0d) is not equal to 'ADDR_WIDTH' parameter value (%0d).",
+        TAG_FIELD_WIDTH, ADDR_WIDTH);
+
     single_hit : assert property(
-        @(posedge clk_i) disable iff (!rstn_i || $isunknown(addr_i))
+        @(posedge clk_i) disable iff (!rstn_i)
         $onehot0(ways_hits))
     else $error("Unexpected value of 'ways_hits' ('b%b). Only single bit can be high.", ways_hits);
+
+    addr_undefined : assert property(
+        @(posedge clk_i) disable iff(rstn_i) 
+        !$isunknown(addr_i))
+    else $error("The 'addr_i' bus contains undefined value(-s) ('h%x).",
+        addr_i);
 
     // ------------------------------------------------------------------------
     // -- Type definitions
