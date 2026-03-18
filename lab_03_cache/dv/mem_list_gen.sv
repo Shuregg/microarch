@@ -1,39 +1,124 @@
 class mem_list_gen #(
-    parameter WORD_WIDTH,
-    parameter WORD_AMOUNT // Equal to max address without byte offset bits
+    parameter TAG_WIDTH,
+    parameter DATA_WIDTH,
+    parameter CELL_AMOUNT // ways * sets
 );
 
-    logic [WORD_WIDTH - 1 : 0] generated_data [WORD_AMOUNT];
+    localparam CELL_WIDTH = 1 + TAG_WIDTH + DATA_WIDTH;
+
+    typedef struct packed {
+        logic                      valid;
+        logic [TAG_WIDTH  - 1 : 0] tag;
+        logic [DATA_WIDTH - 1 : 0] data;
+    } set_t;
+
+    set_t generated_data [CELL_AMOUNT];
 
     function int generate_file(
-        const string output_dir_path  = ".",
-        const string output_file_name = "mem_ini.list"
+        string output_file   = "./mem_ini.list",
+        string radix         = "%b",
+        bit    use_separator = 0,
+        int    valid_prob    = 85
     );
-        int exit_status;
-        string output_file_path = $sformatf("%s/%s", output_dir_path, output_file_name);
-        int fd = $fopen(output_file_path, "w");
+        int exit_status = 1;
+        int fd = $fopen(output_file, "w");
+        radix = radix.tolower();
         if(!fd) begin
             exit_status = 0;
-            $error("Cannot open the file with path: '%s'", output_file_path);
+            $error("Cannot open the file with path: '%s'", output_file);
         end else begin
-            exit_status = 1;
-            $display("The file was opened successfuly: '%s'", output_file_path);
+            $display("The file was opened successfuly: '%s'", output_file);
             $display("Starting generation...");
-            for(longint unsigned i = 0; i <= WORD_AMOUNT; i++) begin
-                logic [WORD_WIDTH - 1 : 0] word;
-                rand_word : assert(std::randomize(word));
-                generated_data[i] = word;
-                $fdisplayb(fd, word);
+            for(int unsigned i = 0; i < CELL_AMOUNT; i++) begin
+                logic [CELL_WIDTH - 1 : 0] cell_val;
+                rand_cell : assert(std::randomize(cell_val) with {
+                    cell_val[CELL_WIDTH - 1] dist {
+                        1'b1 :/ valid_prob,
+                        1'b0 :/ 100 - valid_prob
+                    };
+                });
+                generated_data[i] = cell_val;
+                if(use_separator) begin
+                    string cell_formated = format_with_sep(cell_val, radix);
+                    if(cell_formated == "") begin
+                        exit_status = 0;
+                        break;
+                    end else begin
+                        $fwrite(fd, cell_formated, "\n");
+                    end
+                end else begin
+                    case(radix)
+                        "%b", "%0b", "b", "bin": $fdisplayb(fd, cell_val);
+                        "%o", "%0o", "o", "oct": $fdisplayo(fd, cell_val);
+                        "%d", "%0d", "d", "dec": $fdisplay (fd, cell_val);
+                        "%h", "%0h", "h", "hex": $fdisplayh(fd, cell_val);
+                        default: begin
+                            $error("generate_file: unsupported radix '%s'. Use 'bin', 'oct', 'dec', 'hex' or relative format specifiers.", radix);
+                            exit_status = 0;
+                            break;
+                        end
+                    endcase
+                end
             end
-            $display("Generation has been completed: %s", output_file_path);
+            if(exit_status)
+                $display("Generation has been completed: %s", output_file);
         end
         $fclose(fd);
         return exit_status;
     endfunction : generate_file
 
-    function void get_expected_words_array(ref logic [WORD_WIDTH - 1 : 0] expeced_words_array[WORD_AMOUNT]);
-        for(longint unsigned i = 0; i < WORD_AMOUNT; i++)
-            expeced_words_array[i] = generated_data[i];
+    function void get_generated_cells(ref logic [CELL_WIDTH - 1 : 0] generated_cells[CELL_AMOUNT]);
+        for(int unsigned i = 0; i < CELL_AMOUNT; i++)
+            generated_cells[i] = generated_data[i];
+    endfunction
+
+    function automatic string add_separators(string s, int group_size);
+        int len = s.len();
+        string result = "";
+        int cnt = 0;
+        for (int i = len-1; i >= 0; i--) begin
+            if ((cnt == group_size - 1) && (i != 0)) begin
+                result = {"_", s[i], result};
+                cnt = 0;
+            end else begin
+                result = {s[i], result};
+                cnt++;
+            end
+        end
+        return result;
+    endfunction
+
+    function automatic string format_with_sep (
+        input logic [CELL_WIDTH - 1 : 0] value,
+        input string radix
+    );
+        string str;
+        int group_size;
+
+        radix = radix.tolower();
+        case(radix)
+            "%b", "%0b", "b", "bin": begin
+                str = (radix == "%0b") ? $sformatf("%0b", value) : $sformatf("%b", value);
+                group_size = 8;
+            end
+            "%o", "%0o", "o", "oct": begin
+                str = (radix == "%0o") ? $sformatf("%0o", value) : $sformatf("%o", value);
+                group_size = 3;
+            end
+            "%d", "%0d", "d", "dec": begin
+                str = (radix == "%0d") ? $sformatf("%0d", value) : $sformatf("%d", value);
+                group_size = 3;
+            end
+            "%h", "%0h", "h", "hex": begin
+                str = (radix == "%0h") ? $sformatf("%0h", value) : $sformatf("%h", value);
+                group_size = 4;
+            end
+            default: begin
+                $error("format_with_sep: unsupported radix '%s'. Use 'bin', 'oct', 'dec', 'hex' or relative format specifiers.", radix);
+                return "";
+            end
+        endcase
+        return add_separators(str, group_size);
     endfunction
 
 endclass : mem_list_gen
