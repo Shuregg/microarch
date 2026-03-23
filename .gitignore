@@ -1,0 +1,7 @@
+xcelium.d
+waves.shm
+*.log
+*.history
+.simvision
+xrun.key
+*.svwf

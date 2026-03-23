@@ -22,7 +22,7 @@ module testbench();
         realtime                            timestamp;
     } axis_out_pkt_t;
 
-    typedef enum int { NONE, CH0, CH1, BOTH } read_type_e;
+    typedef enum int { NONE, CH0, CH1, BOTH_WITH_CH0_OLDEST, BOTH_WITH_CH1_OLDEST } read_type_e;
 
     // ----------------------------------------
     // -- TB Variables
@@ -45,7 +45,8 @@ module testbench();
 
     logic [1:0]                      s_user;
 
-    mailbox#(axis_in_pkt_t)  axis_in_mbx      = new();
+    mailbox#(axis_out_pkt_t) axis_in_ch0_mbx  = new();
+    mailbox#(axis_out_pkt_t) axis_in_ch1_mbx  = new();
     mailbox#(axis_out_pkt_t) axis_out_ch0_mbx = new();
     mailbox#(axis_out_pkt_t) axis_out_ch1_mbx = new();
 
@@ -53,11 +54,12 @@ module testbench();
     event axis_read_ch0_ev;
     event axis_read_ch1_ev;
 
-    int unsigned checks_amount = 50;
+    int unsigned fast_mode_tr_amount = 50;
+    int unsigned slow_mode_tr_amount = 50;
+    int unsigned checks_amount = fast_mode_tr_amount + slow_mode_tr_amount;
     int unsigned checks_proceed = 0;
 
-    bit is_test_timeouted = 0;
-    bit fifo_predictor_en       = 0;
+    bit is_test_timeouted       = 0;
     bit axis_out_ch0_monitor_en = 0;
     bit axis_out_ch1_monitor_en = 0;
 
@@ -66,6 +68,8 @@ module testbench();
 
     logic [1:0]   tuser_expected = 2'b01;
     axis_in_pkt_t axis_in_pkt_prev;
+
+    bit first_check = 1;
 
     // ----------------------------------------
     // -- DUT instance
@@ -106,8 +110,11 @@ module testbench();
     endtask : reset_wait
 
     task automatic axis_write(axis_in_pkt_t p);
-        $display("[%0f] Begin AXIS Write transaction 0x%x",
-            $realtime(), p.tdata);
+        axis_out_pkt_t axis_in_pkt_ch_0;
+        axis_out_pkt_t axis_in_pkt_ch_1;
+        realtime ts;
+        // $display("[%0f] Begin AXIS Write transaction 0x%x",
+            // $realtime(), p.tdata);
         @(posedge clk);
         m_valid <= 1'b1;
         m_data  <= p.tdata;
@@ -116,12 +123,19 @@ module testbench();
         end
         while(!m_ready);
         ->axis_write_ev;
-        axis_in_mbx.put(p);
+
+
 
         // Drop.
         m_valid <= 1'b0;
-        $display("[%0f] End   AXIS Write transaction 0x%x",
-            $realtime(), p.tdata);
+        ts = $realtime();
+        axis_in_pkt_ch_0.tdata     = p.tdata[DUT_WORD_WIDTH - 1 : 0];
+        axis_in_pkt_ch_0.timestamp = ts;
+        axis_in_pkt_ch_1.tdata     = p.tdata[2 * DUT_WORD_WIDTH - 1 : DUT_WORD_WIDTH];
+        axis_in_pkt_ch_1.timestamp = ts;
+        axis_in_ch0_mbx.put(axis_in_pkt_ch_0);
+        axis_in_ch1_mbx.put(axis_in_pkt_ch_1);
+        $display("[%0f] Proceed AXIS Write transaction 0x%x", ts, p.tdata);
     endtask : axis_write
 
     task automatic axis_out_monitor(
@@ -162,7 +176,7 @@ module testbench();
         wait(rst_n);
         do begin
             @(posedge clk);
-        end while((s_user[0] && s_valid_ch0 && s_ready_ch0) === 0);
+        end while((s_valid_ch0 && s_ready_ch0 && (s_user[0] || (s_valid_ch1 && s_ready_ch1 && s_user[1]))) === 0);
         ->axis_read_ch0_ev;
 
         p.timestamp = $realtime();
@@ -174,7 +188,7 @@ module testbench();
         wait(rst_n);
         do begin
             @(posedge clk);
-        end while((s_valid_ch1 && s_ready_ch1 && (s_user[1] || (s_user[0] && s_valid_ch0 && s_ready_ch0))) === 0);
+        end while((s_valid_ch1 && s_ready_ch1 && (s_user[1] || (s_valid_ch0 && s_ready_ch0 && s_user[0]))) === 0);
         ->axis_read_ch1_ev;
 
         p.timestamp = $realtime();
@@ -182,21 +196,30 @@ module testbench();
         p.tuser     = s_user;
     endtask : axis_read_ch1
 
-    task automatic read_fifo(input bit parallel_reading);
+    task automatic predict_fifo(input bit parallel_reading);
         case(prev_read_op)
             CH0: begin
-                curr_read_op = CH1;
+                curr_read_op = parallel_reading ? BOTH_WITH_CH1_OLDEST : CH1;
                 tuser_expected = 2'b10;
             end
-            default: begin
-                curr_read_op = parallel_reading ? BOTH : CH0;
+            CH1: begin
+                curr_read_op = parallel_reading ? BOTH_WITH_CH0_OLDEST : CH0;
                 tuser_expected = 2'b01;
+            end
+            NONE,
+            BOTH_WITH_CH0_OLDEST: begin
+                curr_read_op = parallel_reading ? BOTH_WITH_CH0_OLDEST : CH0;
+                tuser_expected = 2'b01;
+            end
+            BOTH_WITH_CH1_OLDEST: begin
+                curr_read_op = parallel_reading ? BOTH_WITH_CH1_OLDEST : CH1;
+                tuser_expected = 2'b10;
             end
         endcase
 
         case(curr_read_op)
             CH0: begin
-                axis_in_pkt_t  p;
+                axis_out_pkt_t p;
                 axis_out_pkt_t p0;
                 axis_out_pkt_t p0_exp;
 
@@ -208,10 +231,11 @@ module testbench();
                     p0.timestamp, p0.tdata, p0.tuser);
 
                 // Catch
-                axis_in_mbx.get(p);
+                $display("[%0f] Waiting for a packet from 'axis_in_ch0_mbx'...", $realtime());
+                axis_in_ch0_mbx.get(p);
 
                 // Predict
-                p0_exp.tdata = p.tdata[DUT_WORD_WIDTH - 1 : 0];
+                p0_exp.tdata = p.tdata;
                 p0_exp.tuser = tuser_expected;
 
                 // Check
@@ -222,11 +246,9 @@ module testbench();
                     $error("[%0f] CH0 Mismatch:\nrec:\n%s\nexp:\n%s",
                         $realtime(), convert_axis_out2string(p0), convert_axis_out2string(p0_exp));
                 end
-
-                axis_in_pkt_prev = p;
             end
             CH1: begin
-                axis_in_pkt_t  p;
+                axis_out_pkt_t p;
                 axis_out_pkt_t p1;
                 axis_out_pkt_t p1_exp;
 
@@ -237,10 +259,11 @@ module testbench();
                 $display("[%0f] Read  data from channel 1: tdata = 0x%x, tuser = 2'b%2b.",
                     p1.timestamp, p1.tdata, p1.tuser);
 
-                p = axis_in_pkt_prev;
+                $display("[%0f] Waiting for a packet from 'axis_in_ch1_mbx'...", $realtime());
+                axis_in_ch1_mbx.get(p);
 
                 // Predict
-                p1_exp.tdata = p.tdata[2 * DUT_WORD_WIDTH - 1 : DUT_WORD_WIDTH];
+                p1_exp.tdata = p.tdata;
                 p1_exp.tuser = tuser_expected;
 
                 // Check
@@ -252,15 +275,30 @@ module testbench();
                         $realtime(), convert_axis_out2string(p1), convert_axis_out2string(p1_exp));
                 end
             end
-            BOTH: begin
-                axis_in_pkt_t  p;
+            BOTH_WITH_CH0_OLDEST,
+            BOTH_WITH_CH1_OLDEST: begin
+                axis_out_pkt_t p0_in;
+                axis_out_pkt_t p1_in;
                 axis_out_pkt_t p0;
                 axis_out_pkt_t p1;
                 axis_out_pkt_t p0_exp;
                 axis_out_pkt_t p1_exp;
 
-                $display("[%0f] Begin parallel reading from both channels...",
-                    $realtime());
+                fork
+                    begin
+                        $display("[%0f] Waiting for a packet from 'axis_in_ch0_mbx'...", $realtime());
+                        axis_in_ch0_mbx.get(p0_in);
+                        // $display("[%0f] Packet of 'axis_in_ch0_mbx' has been received.", $realtime());
+                    end
+                    begin
+                        $display("[%0f] Waiting for a packet from 'axis_in_ch1_mbx'...", $realtime());
+                        axis_in_ch1_mbx.get(p1_in);
+                        // $display("[%0f] Packet of 'axis_in_ch1_mbx' has been received.", $realtime());
+                    end
+                join
+
+                $display("[%0f] Begin parallel reading from both channels (%s)...",
+                    $realtime(), curr_read_op.name());
                 s_ready_ch0 <= 1'b1;
                 s_ready_ch1 <= 1'b1;
                 fork
@@ -278,81 +316,13 @@ module testbench();
                 $display("[%0f] End   parallel reading from both channels.",
                     $realtime());
 
-                axis_in_mbx.get(p);
-
-                p0_exp.tdata     = p.tdata[DUT_WORD_WIDTH - 1 : 0];
+                p0_exp.tdata     = p0_in.tdata;
                 p0_exp.tuser     = tuser_expected;
-                p0_exp.timestamp = p1.timestamp; // Not a mistake.
+                p0_exp.timestamp = p1.timestamp;
 
-                p1_exp.tdata     = p.tdata[2 * DUT_WORD_WIDTH - 1 : DUT_WORD_WIDTH];
-                p1_exp.tuser     = (p0.timestamp == p1.timestamp) ? p0_exp.tuser : ~(p0_exp.tuser);
-                p1_exp.timestamp = p0.timestamp; // Not a mistake.
-
-                if(compare(p0, p0_exp, 1)) begin
-                    $display("[%0f] CH0 Match:\n%s",
-                        $realtime(), convert_axis_out2string(p0));
-                end else begin
-                    $error("[%0f] CH0 Mismatch:\nrec:\n%s\nexp:\n%s",
-                        $realtime(), convert_axis_out2string(p0), convert_axis_out2string(p0_exp));
-                end
-
-                if(compare(p1, p1_exp, 1)) begin
-                    $display("[%0f] CH1 Match:\n%s",
-                        $realtime(), convert_axis_out2string(p1));
-                end else begin
-                    $error("[%0f] CH1 Mismatch:\nrec:\n%s\nexp:\n%s",
-                        $realtime(), convert_axis_out2string(p1), convert_axis_out2string(p1_exp));
-                end
-            end
-            default : $fatal(1, "Wrong 'curr_read_op' value: %s (%0d)",
-                curr_read_op.name(), curr_read_op);
-        endcase
-        s_ready_ch0 <= 1'b0;
-        s_ready_ch1 <= 1'b0;
-        
-        checks_proceed++;
-        prev_read_op = curr_read_op;
-
-        $display("\n");
-    endtask : read_fifo
-
-    task automatic fifo_reader(int unsigned parallel_reading_prob=20);
-        bit parallel_reading;
-        forever begin
-            rand_parallel_reading : assert(std::randomize(parallel_reading) with {
-                parallel_reading dist {
-                    0 :/ (100 - parallel_reading_prob),
-                    1 :/ parallel_reading_prob
-                };
-            });
-            wait(rst_n);
-            read_fifo(parallel_reading);
-        end
-    endtask : fifo_reader
-
-    task automatic fifo_predictor();
-        forever begin
-            if(!fifo_predictor_en) begin
-                wait(fifo_predictor_en);
-            end else begin
-                axis_in_pkt_t  p;
-                axis_out_pkt_t p0;
-                axis_out_pkt_t p1;
-                axis_out_pkt_t p0_exp;
-                axis_out_pkt_t p1_exp;
-                bit            is_timeout = 0;
-
-                fork
-                    axis_in_mbx.get(p);
-                    axis_out_ch0_mbx.get(p0);
-                    axis_out_ch1_mbx.get(p1);
-                join
-
-                p0_exp.tdata = p.tdata[2 * DUT_WORD_WIDTH - 1 : DUT_WORD_WIDTH];
-                p0_exp.tuser = 2'b01;
-
-                p1_exp.tdata = p.tdata[DUT_WORD_WIDTH - 1 : 0];
-                p1_exp.tuser = (p0.timestamp == p1.timestamp) ? p0_exp.tuser : ~(p0_exp.tuser);
+                p1_exp.tdata     = p1_in.tdata;
+                p1_exp.tuser     = tuser_expected;
+                p1_exp.timestamp = p0.timestamp;
 
                 if(compare(p0, p0_exp)) begin
                     $display("[%0f] CH0 Match:\n%s",
@@ -369,17 +339,63 @@ module testbench();
                     $error("[%0f] CH1 Mismatch:\nrec:\n%s\nexp:\n%s",
                         $realtime(), convert_axis_out2string(p1), convert_axis_out2string(p1_exp));
                 end
-                checks_proceed++;
             end
+            default : $fatal(1, "Wrong 'curr_read_op' value: %s (%0d)",
+                curr_read_op.name(), curr_read_op);
+        endcase
+        s_ready_ch0 <= 1'b0;
+        s_ready_ch1 <= 1'b0;
+        
+        checks_proceed++;
+        first_check = 0;
+        prev_read_op = curr_read_op;
+
+        $display("\n");
+    endtask : predict_fifo
+
+    task automatic fifo_predictor(
+        int unsigned parallel_reading_prob=20,
+        int unsigned read_clk_delay_change_prob=20,
+        int unsigned read_clk_delay_min=0,
+        int unsigned read_clk_delay_max=10
+    );
+        bit parallel_reading;
+        int unsigned read_clk_delay = 0;
+        int unsigned read_clk_delay_change = 0;
+
+        forever begin
+            rand_parallel_reading : assert(std::randomize(parallel_reading) with {
+                parallel_reading dist {
+                    0 :/ (100 - parallel_reading_prob),
+                    1 :/ parallel_reading_prob
+                };
+            });
+
+            rand_read_clk_delay_change : assert(std::randomize(read_clk_delay_change) with {
+                read_clk_delay_change dist {
+                    0 :/ (100 - read_clk_delay_change_prob),
+                    1 :/ read_clk_delay_change_prob
+                };
+            });
+
+            if(read_clk_delay_change) begin
+                rand_read_clk_delay : assert(std::randomize(read_clk_delay) with {
+                    read_clk_delay inside {[read_clk_delay_min:read_clk_delay_max]};
+                });
+            end
+
+            wait(rst_n);
+            repeat(read_clk_delay)
+                @(posedge clk);
+            predict_fifo(parallel_reading);
         end
     endtask : fifo_predictor
 
     // Basic test
     task basic_test();
-        fifo_predictor_en = 0;
+        fork begin
 
-        fork
-            repeat(checks_amount) begin
+            repeat(slow_mode_tr_amount) begin
                 axis_in_pkt_t p;
                 int unsigned write_delay;
                 assert(std::randomize(write_delay) with {
@@ -389,10 +405,16 @@ module testbench();
                 repeat(write_delay)
                     @(posedge clk);
             end
-        join_none
+
+            repeat(fast_mode_tr_amount) begin
+                axis_in_pkt_t p;
+                int unsigned write_delay;
+                assert(std::randomize(p));
+                axis_write(p);
+            end
+        end join_none
 
         wait(checks_proceed >= checks_amount);
-        fifo_predictor_en = 0;
 
         repeat(50)
             @(posedge clk);
@@ -435,38 +457,6 @@ module testbench();
         end
     end
 
-    // initial begin : axis_out_ch_0_monitor_proc
-    //     forever begin
-    //         if(!axis_out_ch0_monitor_en) begin
-    //             wait(axis_out_ch0_monitor_en);
-    //         end else begin
-    //             axis_out_pkt_t p;
-    //             axis_out_monitor(p, s_valid_ch0, s_ready_ch0, s_data_ch0,
-    //                 s_user, 0);
-    //             ->axis_read_ch0_ev;
-    //             axis_out_ch0_mbx.put(p);
-    //         end
-    //     end
-    // end
-
-    // initial begin : axis_out_ch_1_monitor_proc
-    //     forever begin
-    //         if(!axis_out_ch1_monitor_en) begin
-    //             wait(axis_out_ch1_monitor_en);
-    //         end else begin
-    //             axis_out_pkt_t p;
-    //             axis_out_monitor(p, s_valid_ch1, s_ready_ch1, s_data_ch1,
-    //                 s_user, 0);
-    //             ->axis_read_ch1_ev;
-    //             axis_out_ch1_mbx.put(p);
-    //         end
-    //     end
-    // end
-
-    initial begin : fifo_reader_proc
-        fifo_reader();
-    end
-
     initial begin : fifo_predictor_proc
         fifo_predictor();
     end
@@ -492,3 +482,4 @@ module testbench();
     end
 
 endmodule : testbench
+
