@@ -213,6 +213,8 @@ set_property -dict {PACKAGE_PIN C12 IOSTANDARD LVCMOS33} [get_ports CPU_RESETN]
 #set_property -dict { PACKAGE_PIN M14   IOSTANDARD LVCMOS33 } [get_ports { QSPI_DQ[3] }]; #IO_L2N_T0_D03_14 Sch=qspi_dq[3]
 #set_property -dict { PACKAGE_PIN L13   IOSTANDARD LVCMOS33 } [get_ports { QSPI_CSN }]; #IO_L6P_T0_FCS_B_14 Sch=qspi_csn
 
+
+
 create_debug_core u_ila_0 ila
 set_property ALL_PROBE_SAME_MU true [get_debug_cores u_ila_0]
 set_property ALL_PROBE_SAME_MU_CNT 2 [get_debug_cores u_ila_0]
@@ -234,11 +236,11 @@ connect_debug_port u_ila_0/probe1 [get_nets [list {u_cnt_4/counter2_max_i[0]} {u
 create_debug_port u_ila_0 probe
 set_property PROBE_TYPE DATA_AND_TRIGGER [get_debug_ports u_ila_0/probe2]
 set_property port_width 8 [get_debug_ports u_ila_0/probe2]
-connect_debug_port u_ila_0/probe2 [get_nets [list {u_cnt_4/counter2_o[0]} {u_cnt_4/counter2_o[1]} {u_cnt_4/counter2_o[2]} {u_cnt_4/counter2_o[3]} {u_cnt_4/counter2_o[4]} {u_cnt_4/counter2_o[5]} {u_cnt_4/counter2_o[6]} {u_cnt_4/counter2_o[7]}]]
+connect_debug_port u_ila_0/probe2 [get_nets [list {u_cnt_4/counter1_o[0]} {u_cnt_4/counter1_o[1]} {u_cnt_4/counter1_o[2]} {u_cnt_4/counter1_o[3]} {u_cnt_4/counter1_o[4]} {u_cnt_4/counter1_o[5]} {u_cnt_4/counter1_o[6]} {u_cnt_4/counter1_o[7]}]]
 create_debug_port u_ila_0 probe
 set_property PROBE_TYPE DATA_AND_TRIGGER [get_debug_ports u_ila_0/probe3]
 set_property port_width 8 [get_debug_ports u_ila_0/probe3]
-connect_debug_port u_ila_0/probe3 [get_nets [list {u_cnt_4/counter1_o[0]} {u_cnt_4/counter1_o[1]} {u_cnt_4/counter1_o[2]} {u_cnt_4/counter1_o[3]} {u_cnt_4/counter1_o[4]} {u_cnt_4/counter1_o[5]} {u_cnt_4/counter1_o[6]} {u_cnt_4/counter1_o[7]}]]
+connect_debug_port u_ila_0/probe3 [get_nets [list {u_cnt_4/counter2_o[0]} {u_cnt_4/counter2_o[1]} {u_cnt_4/counter2_o[2]} {u_cnt_4/counter2_o[3]} {u_cnt_4/counter2_o[4]} {u_cnt_4/counter2_o[5]} {u_cnt_4/counter2_o[6]} {u_cnt_4/counter2_o[7]}]]
 set_property C_CLK_INPUT_FREQ_HZ 300000000 [get_debug_cores dbg_hub]
 set_property C_ENABLE_CLK_DIVIDER false [get_debug_cores dbg_hub]
 set_property C_USER_SCAN_CHAIN 1 [get_debug_cores dbg_hub]

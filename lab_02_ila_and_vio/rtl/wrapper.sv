@@ -59,6 +59,8 @@ module wrapper(
     logic [7:0] counter2_max;
     vio_0 vio_0_inst (
         .clk(CLK100MHZ),
+        .probe_in0(LED[7:0]),
+        .probe_in1(LED[15:8]),
         .probe_out0(counter1_max),
         .probe_out1(counter2_max)
     );
