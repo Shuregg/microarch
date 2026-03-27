@@ -5,6 +5,7 @@ module tb_cache();
     `define STRINGIFY(DEFINE) `"DEFINE`"
 
     parameter  CLK_PERIOD = 1;
+    parameter  RTL_READ_LATENCY = 2;
 
     `ifdef DIRECT_MAPPED_CACHE
         parameter  SETS = 8;
@@ -99,7 +100,7 @@ module tb_cache();
                         $time(), data_rec);
                 end else begin
                     error_cnt++;
-                    $error("[%0t] Right 'data_o' value. Received: 0x%x, Expected: 0x%x (#%0d)",
+                    $error("[%0t] Wrong 'data_o' value. Received: 0x%x, Expected: 0x%x (#%0d)",
                         $time(), data_rec, data_exp, error_cnt);
                 end
             end
@@ -126,12 +127,17 @@ module tb_cache();
                 else
                     cache_vif_h.addr <= tag;
 
-                @(posedge cache_vif_h.clk);
+                repeat(RTL_READ_LATENCY)
+                    @(posedge cache_vif_h.clk);
                 is_hit_valid_timeout = 0;
                 fork
                     fork
                         wait(cache_vif_h.hit_valid === 1'b1);
-                        #(4 * CLK_PERIOD) is_hit_valid_timeout = 1;
+                        begin
+                            repeat(4)
+                                @(posedge cache_vif_h.clk)
+                            is_hit_valid_timeout = 1;
+                        end
                     join_any
                     disable fork;
                 join
@@ -171,8 +177,8 @@ module tb_cache();
                 end
 
                 cache_vif_h.addr <= {tag, set};
-                @(posedge cache_vif_h.clk);
-
+                repeat(RTL_READ_LATENCY)
+                    @(posedge cache_vif_h.clk);
                 is_hit_valid_timeout = 0;
                 fork
                     fork
@@ -245,4 +251,3 @@ module tb_cache();
     end
 
 endmodule : tb_cache
-
