@@ -13,7 +13,7 @@ module cache_ctrl #(
 
     // Master request signals
     output logic                      m_valid_o,
-    input  logic                      m_ready_i,
+    input  logic                      m_ready_i, // not supported.
 
     input  logic [ADDR_WIDTH - 1 : 0] addr_i,
     output logic [DATA_WIDTH - 1 : 0] data_o,
@@ -87,6 +87,16 @@ module cache_ctrl #(
         logic [DATA_WIDTH      - 1 : 0] data;
     } sram_cell_t;
 
+    typedef enum logic [STATE_WIDTH - 1 : 0] {
+        RESET,
+        IDLE,
+        SRAM_REQ,
+        SRAM_ACK,
+        EXT_MEM_REQ,
+        EXT_MEM_ACK,
+        EVICT
+    } cache_ctrl_state_t;
+
     // ------------------------------------------------------------------------
     // -- Internal registers and wires
     // ------------------------------------------------------------------------
@@ -97,105 +107,332 @@ module cache_ctrl #(
     logic [CELL_AMOUNT - 1 : 0][WAYS - 1 : 0] sram_valids_ff_next;
 
     // Cache's SRAM interface signals
-    logic                      sram_ce;
-    logic                      sram_we;
-    logic [ADDR_WIDTH - 1 : 0] sram_addr;
-    logic [CELL_WIDTH - 1 : 0] sram_wdata;
-    logic [CELL_WIDTH - 1 : 0] sram_rdata;
+    logic                      sram_ce_ff;
+    logic                      sram_ce_ff_next;
+    logic                      sram_we_ff;
+    logic                      sram_we_ff_next;
+    logic [ADDR_WIDTH - 1 : 0] sram_addr_ff;
+    logic [ADDR_WIDTH - 1 : 0] sram_addr_ff_next;
+    logic [CELL_WIDTH - 1 : 0] sram_wdata_ff;
+    logic [CELL_WIDTH - 1 : 0] sram_wdata_ff_next;
+    logic [CELL_WIDTH - 1 : 0] sram_rdata_ff;
+    logic [CELL_WIDTH - 1 : 0] sram_rdata_ff_next;
+    logic                      sram_rdata_ff_en
 
-    logic [TAG_FIELD_WIDTH - 1 : 0]          tag;
-    logic [TAG_FIELD_WIDTH - 1 : 0]          tag_ff;
-    logic [SET_FIELD_WIDTH - 1 : 0]          set;
-    logic [SET_FIELD_WIDTH - 1 : 0]          set_ff;
+    // Address shift register with depth = 4
+    logic [SHIFT_REG_DEPTH - 1 : 0][ADDR_WIDTH      - 1 : 0] addr_shift_ff;
+    logic                                                    addr_shift_ff_en
+    logic [SHIFT_REG_DEPTH - 1 : 0][TAG_FIELD_WIDTH - 1 : 0] decoded_tag;
+    logic [SHIFT_REG_DEPTH - 1 : 0][SET_FIELD_WIDTH - 1 : 0] decoded_set;
 
     logic [0 : WAYS - 1]                     ways_hits;
     logic [0 : WAYS - 1][DATA_WIDTH - 1 : 0] ways_data;
 
     logic                                    hit_ff;
-    logic [READ_LATENCY - 1 : 0]             hit_valid_shift_ff; // hit_valid shift reg
+    logic                                    hit_ff_next;
+    // logic [READ_LATENCY - 1 : 0]             hit_valid_shift_ff; // hit_valid shift reg
+    logic                                    hit_valid_ff;
+    logic                                    hit_valid_ff_next;
     logic [DATA_WIDTH - 1 : 0]               data_ff;
     logic [DATA_WIDTH - 1 : 0]               data_ff_next;
+
+    cache_ctrl_state_t                       state_ff;
+    cache_ctrl_state_t                       state_ff_next;
+    logic                                    state_ff_en;
+
+    logic                                    s_hs;
+    logic                                    s_ready_ff;
+    logic                                    s_ready_ff_next;
+    logic                                    m_hs;
+    logic                                    m_valid_ff;
+    logic                                    m_valid_ff_next;
+
+    logic                                    ext_mem_req_ff
+    logic                                    ext_mem_req_ff_next;
+    logic                                    ext_mem_ack;
+    logic [DATA_WIDTH - 1 : 0]               ext_mem_data;
+    logic [ADDR_WIDTH - 1 : 0]               ext_mem_addr_ff;
+    logic [ADDR_WIDTH - 1 : 0]               ext_mem_addr_ff_next;
 
     // ------------------------------------------------------------------------
     // -- Instances
     // ------------------------------------------------------------------------
 
-    assign sram_rdata   = sram_rdata_i;
-    assign sram_ce_o    = sram_ce;
-    assign sram_we_o    = sram_we;
-    assign sram_addr_o  = sram_addr;
-    assign sram_wdata_o = '0;
+    assign ext_mem_ack = ext_mem_ack_i;
+
+    // assign s_ready_o = 
+
+    // Slave handshake;
+    assign s_ready_o = s_ready_ff;
+    assign s_hs = s_valid_i & s_ready_o;
+
+    // Master handshake
+    assign m_valid_o = m_valid_ff;
+    assign m_hs = m_valid_o & m_ready_i;
+
+    // Register enable signals
+    assign state_ff_en = 1'b1;
+    // assign addr_shift_ff_en = 1'b1;
+
+    // FSM next state logic
+    always_comb begin
+        sram_ce_ff_next         = '0;
+        sram_we_ff_next         = '0;
+        sram_addr_ff_next       = '0
+        sram_wdata_ff_next      = '0;
+
+        data_ff_next            = '0;
+
+        hit_valid_ff_next       = '0;
+        s_ready_ff_next         = 1'b0;
+        m_valid_ff_next         = hit_valid_ff_next;
+
+        ext_mem_req_ff_next     = '0;
+        ext_mem_addr_ff_next    = '0;
+
+        addr_shift_ff_en        = 1'b1;
+        sram_rdata_ff_en        = 1'b1;
+
+        case (state_ff)
+            RESET,
+            IDLE: begin
+                s_ready_ff_next         = 1'b1;
+                if (s_hs) begin
+                    state_ff_next       = SRAM_REQ;
+                    sram_ce_ff_next     = 1'b1;
+                    sram_addr_ff_next   = addr_i;
+                end else begin
+                    state_ff_next       = IDLE;
+                end
+            end
+            SRAM_REQ: begin
+                state_ff_next = SRAM_ACK;
+            end
+            SRAM_ACK: begin
+                if (hit_ff_next) begin
+                    s_ready_ff_next = 1'b1;
+                    for(int way = 0; way < WAYS; way++) begin
+                        if (ways_hits[way]) begin
+                            data_ff_next = sram_cell_of_curr_set[way].data;
+                            hit_valid_ff_next = 1'b1;
+                            break;
+                        end
+                    end
+
+                    if(s_hs) begin
+                        state_ff_next = SRAM_REQ;
+                        sram_ce       = 1'b1;
+                        sram_addr     = addr_i;
+                    end else begin
+                        state_ff_next = IDLE;
+                    end
+                end else begin
+                    state_ff_next = EXT_MEM_REQ;
+                    sram_rdata_ff_en     = 1'b0; // Do not update rdata.
+                                                 // It will be used for evicting.
+
+                    s_ready_ff_next      = 1'b0; // Do not receive new requests
+                                                 // while accessing to the
+                                                 // external memory
+
+                    addr_shift_ff_en     = 1'b0; // Do not shift
+
+                    ext_mem_req_ff_next  = 1;
+                    ext_mem_addr_ff_next = addr_shift_ff[1];
+                end
+            end
+            EXT_MEM_REQ: begin
+                // Immediate reaction from external memory is unrealistic.
+                // No aknowledge check in this state.
+                // if(ext_mem_ack)
+
+                state_ff_next        = EXT_MEM_ACK;
+                // Stay req high 2-nd cycle (Wishbone style)
+                ext_mem_req_ff_next  = 1;
+                ext_mem_addr_ff_next = addr_shift_ff[1];
+                sram_rdata_ff_en     = 1'b0; // Do not update rdata.
+                addr_shift_ff_en     = 1'b0; // Do not shift
+            end
+            EXT_MEM_ACK: begin
+                if(ext_mem_ack) begin
+                    state_ff_next   = EVICT;
+
+                    sram_ce_ff_next      = 1'b1;
+                    sram_we_ff_next      = 1'b1;
+                    sram_addr_ff_next    = addr_shift_ff[1];
+
+                    // TODO implement refill algorithm
+                    // TODO calculate LRU way number (index)
+                    // TODO you should use delayed sram_rdata_ff here
+                    // TODO modify sram_rdata_ff with replaced way
+                    sram_wdata_ff_next   = 
+
+                    data_ff_next         = ext_mem_data;
+                    addr_shift_ff_en     = 1'b1;
+                end else begin
+                    state_ff_next        = EXT_MEM_ACK;
+                    sram_rdata_ff_en     = 1'b0; // Do not update rdata.
+                    addr_shift_ff_en     = 1'b0;
+                    ext_mem_addr_ff_next = addr_shift_ff[1];
+                end
+            end
+            EVICT: begin
+                if(s_hs)
+            end
+        endcase
+    end
+
+    always_ff @(posedge clk_i) begin
+        if (!rstn_i) begin
+            state_ff <= RESET;
+        end else if (state_ff_en) begin
+            state_ff <= state_ff_next;
+        end
+    end
+
+    assign sram_rdata_ff_next = sram_rdata_i;
+    assign sram_ce_o    = sram_ce_ff;
+    assign sram_we_o    = sram_we_ff;
+    assign sram_addr_o  = sram_addr_ff;
+    assign sram_wdata_o = sram_wdata_ff;
 
     // Cache's SRAM signals logic
-    assign sram_cell_of_curr_set = sram_rdata;
+    assign sram_cell_of_curr_set = sram_rdata_i;
     assign sram_ce = rstn_i;
     assign sram_we = 1'b0;
-    assign sram_addr = addr_i;
+    assign sram_addr = sram_addr_ff;
+    assign sram_addr_ff;
+    // assign sram_addr_ff_next;
 
     // Read logic
     assign hit_o       = hit_ff;
     assign data_o      = data_ff;
-    assign hit_valid_o = hit_valid_shift_ff[READ_LATENCY - 1];
+    // assign hit_valid_o = hit_valid_shift_ff[READ_LATENCY - 1];
+    assign hit_valid_o = hit_valid_ff;
 
-    always_comb begin : tag_set_comb_logic
-        {tag, set} = (SETS == 1) ? {addr_i, 1'b0} : addr_i;
-    end
-
-    always_ff @(posedge clk_i) begin : tag_ff_seq_logic
-        if(!rstn_i) begin
-            tag_ff <= 0;
+    always_comb begin
+        if(SETS == 1) begin
+            for(int i = 0; i < SHIFT_REG_DEPTH; i++) begin
+                decoded_tag[i] = addr_shift_ff[i];
+                decoded_set[i] = '0;
+            end
         end else begin
-            tag_ff <= tag;
+            for(int i = 0; i < SHIFT_REG_DEPTH; i++) begin
+                {decoded_tag[i], decoded_set[i]} = addr_shift_ff[i];
+            end
         end
     end
 
-    always_ff @(posedge clk_i) begin : set_ff_seq_logic
-        if(!rstn_i) begin
-            set_ff <= 0;
-        end else begin
-            set_ff <= set;
+    always_ff @(posedge clk_i) begin
+        if (!rstn_i) begin
+            addr_shift_ff <= '0;
+        end else if (addr_shift_ff_en) begin
+            addr_shift_ff <= {addr_shift_ff[SHIFT_REG_DEPTH - 2 : 0], addr_i};
         end
     end
 
     always_comb begin : ways_hits_comb_logic
         for(int way = 0; way < WAYS; way++) begin
-            ways_hits[way] = (sram_cell_of_curr_set[way].tag == tag_ff) & (sram_valids_ff[set_ff][way]);
-        end
-    end
-
-    always_comb begin : data_ff_next_comb_logic
-        for(int way = 0; way < WAYS; way++) begin
-            if(ways_hits[way]) begin
-                data_ff_next = sram_cell_of_curr_set[way].data;
-                break;
-            end else begin
-                data_ff_next = data_ff;
-            end
+            ways_hits[way] = (sram_cell_of_curr_set[way].tag == decoded_tag[0]) & (sram_valids_ff[decoded_set[0]][way]);
         end
     end
 
     always_ff @(posedge clk_i) begin : data_ff_seq_logic
-        if(!rstn_i) begin
+        if (!rstn_i) begin
             data_ff <= 0;
         end else begin
             data_ff <= data_ff_next;
         end
     end
 
-    always_ff @(posedge clk_i) begin : hit_valid_shift_ff_seq_logic
-        if(!rstn_i) begin
-            hit_valid_shift_ff <= 0;
+    // always_ff @(posedge clk_i) begin : hit_valid_shift_ff_seq_logic
+    //     if (!rstn_i) begin
+    //         hit_valid_shift_ff <= 0;
+    //     end else begin
+    //         hit_valid_shift_ff <= {hit_valid_shift_ff[READ_LATENCY - 2 : 0], 1'b1};
+    //     end
+    // end
+
+    always_ff @(posedge clk_i) begin
+        if (!rstn_i) begin
+            hit_valid_ff <= '0;
         end else begin
-            hit_valid_shift_ff <= {hit_valid_shift_ff[0], 1'b1};
+            hit_valid_ff <= hit_valid_ff_next;
         end
     end
 
+    assign hit_ff_next = |(ways_hits);
     always_ff @(posedge clk_i) begin : hit_ff_seq_logic
-        if(!rstn_i) begin
+        if (!rstn_i) begin
             hit_ff <= 1'b0;
         end else begin
-            hit_ff <= ^(ways_hits);
+            hit_ff <= hit_ff_next;
         end
     end
+
+    // Handshake logic
+    always_ff @(posedge clk_i) begin
+        if (!rstn_i) begin
+            s_ready_ff <= 1'b1;
+        end else begin
+            s_ready_ff <= s_ready_ff_next;
+        end
+    end
+    always_ff @(posedge clk_i) begin
+        if (!rstn_i) begin
+            m_valid_ff <= 1'b0;
+        end else begin
+            m_valid_ff <= m_valid_ff_next;
+        end
+    end
+
+    // Cache's SRAM memory logic
+
+    always_ff @(posedge clk_i) begin
+        if (!rstn_i) begin
+            sram_ce_ff <= 1'b0;
+        end else begin
+            sram_ce_ff <= sram_ce_ff_next;
+        end
+    end
+    always_ff @(posedge clk_i) begin
+        if (!rstn_i) begin
+            sram_we_ff <= '0;
+        end else begin
+            sram_we_ff <= sram_we_ff_next;
+        end
+    end
+    always_ff @(posedge clk_i) begin
+        if (!rstn_i) begin
+            sram_addr_ff <= '0;
+        end else begin
+            sram_addr_ff <= sram_addr_ff_next;
+        end
+    end
+    always_ff @(posedge clk_i) begin
+        if (!rstn_i) begin
+            sram_wdata_ff <= '0;
+        end else begin
+            sram_wdata_ff <= sram_wdata_ff_next;
+        end
+    end
+    always_ff @(posedge clk_i) begin
+        if (!rstn_i) begin
+            sram_rdata_ff <= '0;
+        end else if (sram_rdata_ff_en) begin
+            sram_rdata_ff <= sram_rdata_ff_next;
+        end
+    end
+
+    // External memory logic
+    always_ff @(posedge clk_i) begin
+        if (!rstn_i) begin
+            ext_mem_req_ff <= '0;
+        end else begin
+            ext_mem_req_ff <= ext_mem_req_ff_next;
+        end
+    end
+
+
 
 endmodule : cache_ctrl

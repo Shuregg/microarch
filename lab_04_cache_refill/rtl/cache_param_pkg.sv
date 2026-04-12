@@ -13,6 +13,9 @@ package cache_param_pkg;
     parameter DATA_WIDTH = 32;
     parameter ADDR_WIDTH = 30;
 
+    parameter STATE_WIDTH = 4;
+    parameter SHIFT_REG_DEPTH = 4;
+
     localparam SET_WIDTH    = SETS != 1 ? $clog2(SETS) : 1;
     localparam TAG_WIDTH    = SETS != 1 ? ADDR_WIDTH - SET_WIDTH : ADDR_WIDTH;
 
