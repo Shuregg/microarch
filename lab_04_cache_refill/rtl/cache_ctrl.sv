@@ -1,9 +1,8 @@
-
 module cache_ctrl #(
-    SETS = 8,
-    WAYS = 1,
-    DATA_WIDTH = 32,
-    ADDR_WIDTH = 30
+    SETS,
+    WAYS,
+    DATA_WIDTH,
+    ADDR_WIDTH
 ) (
     input  logic                      clk_i,
     input  logic                      rstn_i,
@@ -199,4 +198,4 @@ module cache_ctrl #(
         end
     end
 
-endmodule : cache
+endmodule : cache_ctrl

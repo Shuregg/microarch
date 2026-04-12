@@ -1,7 +1,7 @@
 module cache_sram_model #(
-    CELL_AMOUNT = 8,
-    ADDR_WIDTH  = 30,
-    CELL_WIDTH  = 326
+    CELL_AMOUNT,
+    ADDR_WIDTH,
+    CELL_WIDTH
 ) (
     input  logic                      clk_i,
     input  logic                      ce_i,

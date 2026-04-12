@@ -5,11 +5,6 @@ interface cache_if # (
     input logic                clk,
     input logic                rstn
 );
-    logic [ADDR_WIDTH - 1 : 0] addr;
-    logic [DATA_WIDTH - 1 : 0] data;
-    logic                      hit_valid;
-    logic                      hit;
-
     // Slave request signals
     logic                      s_valid;
     logic                      s_ready;

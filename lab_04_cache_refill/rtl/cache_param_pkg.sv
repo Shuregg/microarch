@@ -1,7 +1,15 @@
 package cache_param_pkg;
 
-    parameter SETS = 8;
-    parameter WAYS = 1;
+    `ifdef DIRECT_MAPPED_CACHE
+        parameter  SETS = 8;
+        parameter  WAYS = 1;
+    `elsif FOUR_WAY_SET_ASSOCIATIVE_CACHE
+        parameter  SETS = 2;
+        parameter  WAYS = 4;
+    `elsif FULLY_ASSOCIATIVE_CACHE
+        parameter  SETS = 1;
+        parameter  WAYS = 8;
+    `endif
     parameter DATA_WIDTH = 32;
     parameter ADDR_WIDTH = 30;
 

@@ -23,9 +23,11 @@ XRUN_OPTS:= \
 	${USER_DEFINES} \
     -incdir ${TB_PATH} \
 	${TB_PATH}/mem_list_gen.sv \
+    ${RTL_PATH}/cache_param_pkg.sv \
 	${TB_PATH}/tb_cache.sv \
     ${RTL_PATH}/cache_sram_model.sv \
-	${RTL_PATH}/cache.sv
+	${RTL_PATH}/cache_ctrl.sv \
+	${RTL_PATH}/cache_top.sv
 
 sim:
 	xrun $(XRUN_OPTS)

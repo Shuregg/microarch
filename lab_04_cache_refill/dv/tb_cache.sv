@@ -1,3 +1,5 @@
+import cache_param_pkg::*;
+
 `include "cache_if.sv"
 
 module tb_cache();
@@ -6,28 +8,6 @@ module tb_cache();
 
     parameter  CLK_PERIOD = 1;
     parameter  RTL_READ_LATENCY = 2;
-
-    `ifdef DIRECT_MAPPED_CACHE
-        parameter  SETS = 8;
-        parameter  WAYS = 1;
-    `elsif FOUR_WAY_SET_ASSOCIATIVE_CACHE
-        parameter  SETS = 2;
-        parameter  WAYS = 4;
-    `elsif FULLY_ASSOCIATIVE_CACHE
-        parameter  SETS = 1;
-        parameter  WAYS = 8;
-    `endif
-
-    parameter  ADDR_WIDTH        = 32;
-    parameter  DATA_WIDTH        = 32;
-    parameter  BYTE_OFFSET_WIDTH = 2;
-
-    localparam ADDR_WIDTH_CUT    = (ADDR_WIDTH - BYTE_OFFSET_WIDTH);
-    localparam CELL_AMOUNT       = SETS;
-    localparam VALID_WIDTH       = 1;
-    localparam SET_WIDTH         = $clog2(SETS);
-    localparam TAG_WIDTH         = ADDR_WIDTH_CUT - SET_WIDTH;
-    localparam CELL_WIDTH        = TAG_WIDTH + DATA_WIDTH;
 
     typedef struct packed {
         logic [TAG_WIDTH  - 1 : 0] tag;
@@ -58,26 +38,38 @@ module tb_cache();
     mem_list_gen #(TAG_WIDTH, DATA_WIDTH, CELL_AMOUNT, WAYS) mem_list_gen_h;
 
     // Interface signals
-    cache_if #(ADDR_WIDTH_CUT, DATA_WIDTH) cache_if_h (
+    cache_if #(ADDR_WIDTH, DATA_WIDTH) cache_if_h (
         .clk  (clk),
         .rstn (rstn)
     );
 
-    virtual cache_if #(ADDR_WIDTH_CUT, DATA_WIDTH) cache_vif_h;
+    virtual cache_if #(ADDR_WIDTH, DATA_WIDTH) cache_vif_h;
 
     // DUT
-    cache #(
+    cache_top #(
         .SETS        (SETS),
         .WAYS        (WAYS),
         .DATA_WIDTH  (DATA_WIDTH),
-        .ADDR_WIDTH  (ADDR_WIDTH_CUT)
-    ) u_cache (
-        .clk_i       (clk),
-        .rstn_i      (rstn),
-        .addr_i      (cache_if_h.addr),
-        .data_o      (cache_if_h.data),
-        .hit_valid_o (cache_if_h.hit_valid),
-        .hit_o       (cache_if_h.hit)
+        .ADDR_WIDTH  (ADDR_WIDTH)
+    ) u_cache_top (
+        .clk_i          (cache_if_h.clk),
+        .rstn_i         (cache_if_h.rstn),
+
+        .s_valid_i      (cache_if_h.s_valid),
+        .s_ready_o      (cache_if_h.s_ready),
+
+        .m_valid_o      (cache_if_h.m_valid),
+        .m_ready_i      (cache_if_h.m_ready),
+
+        .addr_i         (cache_if_h.addr),
+        .data_o         (cache_if_h.data),
+        .hit_valid_o    (cache_if_h.hit_valid),
+        .hit_o          (cache_if_h.hit),
+
+        .ext_mem_req_o  (cache_if_h.ext_mem_req),
+        .ext_mem_addr_o (cache_if_h.ext_mem_addr),
+        .ext_mem_data_i (cache_if_h.ext_mem_data),
+        .ext_mem_ack_i  (cache_if_h.ext_mem_ack)
     );
 
     task automatic reset_gen();
@@ -216,15 +208,18 @@ module tb_cache();
         cache_vif_h = cache_if_h;
 
         cache_vif_h.addr <= 0;
+        cache_vif_h.addr <= 0;
+        cache_vif_h.m_ready <= 1'b1; // Testbench is always ready to receive data
+        cache_vif_h.s_valid <= 1'b1; // Testbench always sends valid address
 
         // Generate cache initialization file
         mem_list_gen_h = new();
-        assert(mem_list_gen_h.generate_file(cache_ini_file, "%h", 1));
+        assert(mem_list_gen_h.generate_file(cache_ini_file, "%h", 85));
         mem_list_gen_h.get_generated_cells(expected_valids, expected_cells);
 
         // Initialize cache memory
-        $readmemh(cache_ini_file, u_cache.u_cache_sram.sram);
-        u_cache.sram_valids_ff = expected_valids;
+        $readmemh(cache_ini_file, u_cache_top.u_cache_sram.sram);
+        u_cache_top.u_cache_ctrl.sram_valids_ff = expected_valids;
 
         // Wait for reset done
         @(negedge cache_vif_h.rstn);
@@ -258,3 +253,4 @@ module tb_cache();
     end
 
 endmodule : tb_cache
+
