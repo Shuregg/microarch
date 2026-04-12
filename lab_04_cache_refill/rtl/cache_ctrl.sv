@@ -1,4 +1,5 @@
-module cache #(
+
+module cache_ctrl #(
     SETS = 8,
     WAYS = 1,
     DATA_WIDTH = 32,
@@ -6,10 +7,31 @@ module cache #(
 ) (
     input  logic                      clk_i,
     input  logic                      rstn_i,
+
+    // Slave request signals
+    input  logic                      s_valid_i,
+    output logic                      s_ready_o,
+
+    // Master request signals
+    output logic                      m_valid_o,
+    input  logic                      m_ready_i,
+
     input  logic [ADDR_WIDTH - 1 : 0] addr_i,
     output logic [DATA_WIDTH - 1 : 0] data_o,
     output logic                      hit_valid_o,
-    output logic                      hit_o
+    output logic                      hit_o,
+
+    output logic                      sram_ce_o,
+    output logic                      sram_we_o,
+    output logic [ADDR_WIDTH - 1 : 0] sram_addr_o,
+    output logic [CELL_WIDTH - 1 : 0] sram_wdata_o,
+    input  logic [CELL_WIDTH - 1 : 0] sram_rdata_i,
+
+    output logic                      ext_mem_req_o,
+    output logic [ADDR_WIDTH - 1 : 0] ext_mem_addr_o,
+    input  logic [DATA_WIDTH - 1 : 0] ext_mem_data_i,
+    input  logic                      ext_mem_ack_i
+
 );
 
     // ------------------------------------------------------------------------
@@ -70,9 +92,8 @@ module cache #(
     // -- Internal registers and wires
     // ------------------------------------------------------------------------
 
+    // SRAM cells: Valid, tag, data
     sram_cell_t [WAYS - 1 : 0] sram_cell_of_curr_set;
-
-    // logic [WAYS - 1 : 0][TAG_FIELD_WIDTH - 1 : 0] sram_tags_ff;
     logic [CELL_AMOUNT - 1 : 0][WAYS - 1 : 0] sram_valids_ff;
     logic [CELL_AMOUNT - 1 : 0][WAYS - 1 : 0] sram_valids_ff_next;
 
@@ -80,8 +101,8 @@ module cache #(
     logic                      sram_ce;
     logic                      sram_we;
     logic [ADDR_WIDTH - 1 : 0] sram_addr;
-    logic [CELL_WIDTH - 1 : 0] sram_rdata;
     logic [CELL_WIDTH - 1 : 0] sram_wdata;
+    logic [CELL_WIDTH - 1 : 0] sram_rdata;
 
     logic [TAG_FIELD_WIDTH - 1 : 0]          tag;
     logic [TAG_FIELD_WIDTH - 1 : 0]          tag_ff;
@@ -100,27 +121,11 @@ module cache #(
     // -- Instances
     // ------------------------------------------------------------------------
 
-    cache_sram_model #(
-        .CELL_AMOUNT(CELL_AMOUNT),
-        .ADDR_WIDTH (ADDR_WIDTH),
-        .CELL_WIDTH (CELL_WIDTH)
-    ) u_cache_sram (
-        .clk_i  (clk_i),
-        .ce_i   (sram_ce),
-        .we_i   (sram_we),
-        .addr_i (sram_addr),
-        .data_i (sram_wdata),
-        .data_o (sram_rdata)
-    );
-
-    // // Valid logic
-    // always_ff @(posedge clk_i) begin
-    //     if(!rstn_i) begin
-    //         sram_valids_ff <= '0;
-    //     end else begin
-    //         sram_valids_ff <= sram_valids_ff_next;
-    //     end
-    // end
+    assign sram_rdata   = sram_rdata_i;
+    assign sram_ce_o    = sram_ce;
+    assign sram_we_o    = sram_we;
+    assign sram_addr_o  = sram_addr;
+    assign sram_wdata_o = '0;
 
     // Cache's SRAM signals logic
     assign sram_cell_of_curr_set = sram_rdata;
@@ -128,10 +133,7 @@ module cache #(
     assign sram_we = 1'b0;
     assign sram_addr = addr_i;
 
-    // ------------------------------------------------------------------------
-    // -- Read logic
-    // ------------------------------------------------------------------------
-
+    // Read logic
     assign hit_o       = hit_ff;
     assign data_o      = data_ff;
     assign hit_valid_o = hit_valid_shift_ff[READ_LATENCY - 1];
