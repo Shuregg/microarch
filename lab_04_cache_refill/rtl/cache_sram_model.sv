@@ -1,7 +1,7 @@
 module cache_sram_model #(
     CELL_AMOUNT = 8,
     ADDR_WIDTH  = 30,
-    CELL_WIDTH  = 32
+    CELL_WIDTH  = 326
 ) (
     input  logic                      clk_i,
     input  logic                      ce_i,
@@ -11,7 +11,12 @@ module cache_sram_model #(
     output logic [CELL_WIDTH - 1 : 0] data_o
 );
     // Internal address width (or set width)
-    localparam INT_ADDR_WIDTH = $clog2(CELL_AMOUNT);
+    localparam INT_ADDR_WIDTH = CELL_AMOUNT != 1 ? $clog2(CELL_AMOUNT) : 1;
+
+    set_tag_width_sum : assert property(
+        @(posedge clk_i) 
+        INT_ADDR_WIDTH >= 1)
+    else $error("Wrong INT_ADDR_WIDTH parameter value (%0d).", INT_ADDR_WIDTH);
 
     // Local wires & registers
     logic [CELL_WIDTH     - 1 : 0] sram       [0: CELL_AMOUNT - 1];
@@ -21,7 +26,7 @@ module cache_sram_model #(
     logic                          wr_op;
 
     assign data_o   = data_o_ff;
-    assign int_addr = addr_i[INT_ADDR_WIDTH - 1 : 0];
+    assign int_addr = (CELL_AMOUNT != 1) ? (addr_i[INT_ADDR_WIDTH - 1 : 0]) : ('0);
 
     assign rd_op = ce_i & (~we_i);
     assign wr_op = ce_i & we_i;

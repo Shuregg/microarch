@@ -1,7 +1,8 @@
 class mem_list_gen #(
     parameter TAG_WIDTH,
     parameter DATA_WIDTH,
-    parameter CELL_AMOUNT // sets
+    parameter CELL_AMOUNT, // sets
+    parameter WAY_AMOUNT
 );
 
     localparam CELL_WIDTH = TAG_WIDTH + DATA_WIDTH;
@@ -11,7 +12,8 @@ class mem_list_gen #(
         logic [DATA_WIDTH - 1 : 0] data;
     } set_t;
 
-    set_t generated_data [CELL_AMOUNT];
+    set_t [CELL_AMOUNT - 1 : 0][WAY_AMOUNT - 1 : 0] generated_data;
+    logic [CELL_AMOUNT - 1 : 0][WAY_AMOUNT - 1 : 0] generated_valids;
 
     function int generate_file(
         string output_file   = "./mem_ini.list",
@@ -29,17 +31,17 @@ class mem_list_gen #(
             $display("The file was opened successfuly: '%s'", output_file);
             $display("Starting generation...");
             for(int unsigned i = 0; i < CELL_AMOUNT; i++) begin
-                logic                      cell_valid
-                logic [CELL_WIDTH - 1 : 0] cell_value;
-                rand_cell_valid : assert(std::randomize(cell_valid) with {
-                    cell_valid dist {
-                        1'b1 :/ valid_prob,
-                        1'b0 :/ 100 - valid_prob
+                logic [WAY_AMOUNT - 1 : 0] cell_valids;
+                set_t [WAY_AMOUNT - 1 : 0] cell_value;
+                rand_cell_valids : assert(std::randomize(cell_valids) with {
+                    cell_valids dist {
+                        1'b1 :/ (valid_prob),
+                        1'b0 :/ (100 - valid_prob)
                     };
                 });
-                rand_cell_value : assert (std::randomize(cell_value))
-                cell_valids[i]    = cell_valid;
+                rand_cell_value : assert(std::randomize(cell_value));
                 generated_data[i] = cell_value;
+                generated_valids[i] = cell_valids;
                 if(use_separator) begin
                     string cell_formated = format_with_sep(cell_value, radix);
                     if(cell_formated == "") begin
@@ -70,10 +72,13 @@ class mem_list_gen #(
     endfunction : generate_file
 
     function void get_generated_cells(
-        ref logic [CELL_AMOUNT - 1 : 0] cell_valids,
-        ref logic [CELL_WIDTH - 1 : 0] generated_cells[CELL_AMOUNT]);
-        for(int unsigned i = 0; i < CELL_AMOUNT; i++)
-            generated_cells[i] = generated_data[i];
+        ref logic [CELL_AMOUNT - 1 : 0][WAY_AMOUNT - 1 : 0] generated_valids,
+        ref set_t [CELL_AMOUNT - 1 : 0][WAY_AMOUNT - 1 : 0] generated_cells
+    );
+        for(int unsigned i = 0; i < CELL_AMOUNT; i++) begin
+            generated_cells[i]  = this.generated_data[i];
+            generated_valids[i] = this.generated_valids[i];
+        end
     endfunction
 
     function automatic string add_separators(string s, int group_size);

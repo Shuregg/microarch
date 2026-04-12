@@ -52,7 +52,7 @@ module cache #(
     else $error("Unexpected value of 'ways_hits' ('b%b). Only single bit can be high.", ways_hits);
 
     addr_undefined : assert property(
-        @(posedge clk_i) disable iff(rstn_i) 
+        @(posedge clk_i) disable iff(!rstn_i) 
         !$isunknown(addr_i))
     else $error("The 'addr_i' bus contains undefined value(-s) ('h%x).",
         addr_i);
@@ -73,8 +73,8 @@ module cache #(
     sram_cell_t [WAYS - 1 : 0] sram_cell_of_curr_set;
 
     // logic [WAYS - 1 : 0][TAG_FIELD_WIDTH - 1 : 0] sram_tags_ff;
-    logic [CELL_AMOUNT - 1 : 0]                   sram_valids_ff;
-    logic [CELL_AMOUNT - 1 : 0]                   sram_valids_ff_next;
+    logic [CELL_AMOUNT - 1 : 0][WAYS - 1 : 0] sram_valids_ff;
+    logic [CELL_AMOUNT - 1 : 0][WAYS - 1 : 0] sram_valids_ff_next;
 
     // Cache's SRAM interface signals
     logic                      sram_ce;
@@ -158,7 +158,7 @@ module cache #(
 
     always_comb begin : ways_hits_comb_logic
         for(int way = 0; way < WAYS; way++) begin
-            ways_hits[way] = (sram_cell_of_curr_set[way].tag == tag_ff) & (sram_valids_ff[set_ff * WAYS + way]);
+            ways_hits[way] = (sram_cell_of_curr_set[way].tag == tag_ff) & (sram_valids_ff[set_ff][way]);
         end
     end
 

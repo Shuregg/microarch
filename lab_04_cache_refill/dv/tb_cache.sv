@@ -30,15 +30,15 @@ module tb_cache();
     localparam CELL_WIDTH        = TAG_WIDTH + DATA_WIDTH;
 
     typedef struct packed {
-        logic                      valid;
         logic [TAG_WIDTH  - 1 : 0] tag;
         logic [DATA_WIDTH - 1 : 0] data;
     } set_t;
 
 
     // TB variables
-    logic [CELL_AMOUNT - 1 : 0] expected_valids;
-    set_t expeced_cells[CELL_AMOUNT];
+    logic [CELL_AMOUNT - 1 : 0][WAYS - 1 : 0] expected_valids;
+    set_t [CELL_AMOUNT - 1 : 0][WAYS - 1 : 0] expected_cells;
+
 
     int unsigned error_cnt = 0;
     bit          is_hit_valid_timeout = 0;
@@ -55,7 +55,7 @@ module tb_cache();
 
     string cache_ini_file = `STRINGIFY(`CACHE_INI_FILE);
 
-    mem_list_gen #(TAG_WIDTH, DATA_WIDTH, CELL_AMOUNT) mem_list_gen_h;
+    mem_list_gen #(TAG_WIDTH, DATA_WIDTH, CELL_AMOUNT, WAYS) mem_list_gen_h;
 
     // Interface signals
     cache_if #(ADDR_WIDTH_CUT, DATA_WIDTH) cache_if_h (
@@ -118,10 +118,10 @@ module tb_cache();
                 int unsigned cell_idx = (i * WAYS + j);
                 $display("");
                 set      = i;
-                tag      = expeced_cells[cell_idx].tag;
-                data_exp = expeced_cells[cell_idx].data;
-                valid    = expected_valids;
-                hit_exp  = valid[cell_idx];
+                tag      = expected_cells[i][j].tag;
+                data_exp = expected_cells[i][j].data;
+                valid    = expected_valids[i][j];
+                hit_exp  = valid;
 
                 if(SETS != 1)
                     cache_vif_h.addr <= {tag, set};
@@ -165,16 +165,21 @@ module tb_cache();
                 rand_tag : assert(std::randomize(tag));
                 hit_exp = 0;
                 for(int j = 0; j < CELL_AMOUNT; j++) begin
-                    logic [TAG_WIDTH  - 1 : 0] set_tmp = i;
-                    logic [DATA_WIDTH - 1 : 0] tag_tmp = expeced_cells[j].tag;
-                    logic [SET_WIDTH  - 1 : 0] dat_tmp = expeced_cells[j].data;
-                    if((tag === tag_tmp) && (j / WAYS == set)) begin
-                        hit_exp = 1;
-                        data_exp = dat_tmp;
-                        break;
-                    end else begin
-                        hit_exp = 0;
+                    bit tag_match = 0;
+                    for(int k = 0; k < WAYS; k++) begin
+                        logic [SET_WIDTH  - 1 : 0] set_tmp = i;
+                        logic [TAG_WIDTH  - 1 : 0] tag_tmp = expected_cells[j][k].tag;
+                        logic [DATA_WIDTH - 1 : 0] dat_tmp = expected_cells[j][k].data;
+                        if((tag === tag_tmp) && (j / WAYS == set)) begin
+                            hit_exp = 1;
+                            data_exp = dat_tmp;
+                            tag_match = 1;
+                            break;
+                        end else begin
+                            hit_exp = 0;
+                        end
                     end
+
                 end
 
                 cache_vif_h.addr <= {tag, set};
@@ -215,10 +220,11 @@ module tb_cache();
         // Generate cache initialization file
         mem_list_gen_h = new();
         assert(mem_list_gen_h.generate_file(cache_ini_file, "%h", 1));
-        mem_list_gen_h.get_generated_cells(expected_valids, expeced_cells);
+        mem_list_gen_h.get_generated_cells(expected_valids, expected_cells);
 
         // Initialize cache memory
-        $readmemh(cache_ini_file, u_cache.sram);
+        $readmemh(cache_ini_file, u_cache.u_cache_sram.sram);
+        u_cache.sram_valids_ff = expected_valids;
 
         // Wait for reset done
         @(negedge cache_vif_h.rstn);

@@ -24,6 +24,7 @@ XRUN_OPTS:= \
     -incdir ${TB_PATH} \
 	${TB_PATH}/mem_list_gen.sv \
 	${TB_PATH}/tb_cache.sv \
+    ${RTL_PATH}/cache_sram_model.sv \
 	${RTL_PATH}/cache.sv
 
 sim:
