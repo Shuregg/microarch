@@ -23,11 +23,11 @@ module tb_cache();
     parameter  BYTE_OFFSET_WIDTH = 2;
 
     localparam ADDR_WIDTH_CUT    = (ADDR_WIDTH - BYTE_OFFSET_WIDTH);
-    localparam CELL_AMOUNT       = SETS * WAYS;
+    localparam CELL_AMOUNT       = SETS;
     localparam VALID_WIDTH       = 1;
     localparam SET_WIDTH         = $clog2(SETS);
     localparam TAG_WIDTH         = ADDR_WIDTH_CUT - SET_WIDTH;
-    localparam CELL_WIDTH        = VALID_WIDTH + TAG_WIDTH + DATA_WIDTH;
+    localparam CELL_WIDTH        = TAG_WIDTH + DATA_WIDTH;
 
     typedef struct packed {
         logic                      valid;
@@ -37,6 +37,7 @@ module tb_cache();
 
 
     // TB variables
+    logic [CELL_AMOUNT - 1 : 0] expected_valids;
     set_t expeced_cells[CELL_AMOUNT];
 
     int unsigned error_cnt = 0;
@@ -114,13 +115,13 @@ module tb_cache();
     task automatic check_cache_hit();
         for(int unsigned i = 0; i < SETS; i++) begin
             for(int unsigned j = 0; j < WAYS; j++) begin
-                int unsigned idx = (i * WAYS + j);
+                int unsigned cell_idx = (i * WAYS + j);
                 $display("");
                 set      = i;
-                tag      = expeced_cells[idx].tag;
-                data_exp = expeced_cells[idx].data;
-                valid    = expeced_cells[idx].valid;
-                hit_exp  = valid;
+                tag      = expeced_cells[cell_idx].tag;
+                data_exp = expeced_cells[cell_idx].data;
+                valid    = expected_valids;
+                hit_exp  = valid[cell_idx];
 
                 if(SETS != 1)
                     cache_vif_h.addr <= {tag, set};
@@ -214,7 +215,7 @@ module tb_cache();
         // Generate cache initialization file
         mem_list_gen_h = new();
         assert(mem_list_gen_h.generate_file(cache_ini_file, "%h", 1));
-        mem_list_gen_h.get_generated_cells(expeced_cells);
+        mem_list_gen_h.get_generated_cells(expected_valids, expeced_cells);
 
         // Initialize cache memory
         $readmemh(cache_ini_file, u_cache.sram);

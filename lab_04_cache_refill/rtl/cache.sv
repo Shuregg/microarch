@@ -20,6 +20,10 @@ module cache #(
     localparam TAG_FIELD_WIDTH = SETS != 1 ? ADDR_WIDTH - SET_FIELD_WIDTH : ADDR_WIDTH;
     localparam READ_LATENCY = 2;
 
+    // Single SRAM cell contains tags and data of all ways
+    localparam CELL_AMOUNT = SETS;
+    localparam CELL_WIDTH = WAYS * (TAG_FIELD_WIDTH + DATA_WIDTH);
+
     // ------------------------------------------------------------------------
     // -- Quality checks
     // ------------------------------------------------------------------------
@@ -58,19 +62,26 @@ module cache #(
     // ------------------------------------------------------------------------
 
     typedef struct packed {
-        logic                           valid;
         logic [TAG_FIELD_WIDTH - 1 : 0] tag;
         logic [DATA_WIDTH      - 1 : 0] data;
-    } set_t;
+    } sram_cell_t;
 
     // ------------------------------------------------------------------------
     // -- Internal registers and wires
     // ------------------------------------------------------------------------
 
-    set_t sram[0 : SETS - 1][0 : WAYS - 1];
+    sram_cell_t [WAYS - 1 : 0] sram_cell_of_curr_set;
 
-    logic [WAYS - 1 : 0][TAG_FIELD_WIDTH - 1 : 0] sram_tags_ff;
-    logic [WAYS - 1 : 0]                          sram_valids_ff;
+    // logic [WAYS - 1 : 0][TAG_FIELD_WIDTH - 1 : 0] sram_tags_ff;
+    logic [CELL_AMOUNT - 1 : 0]                   sram_valids_ff;
+    logic [CELL_AMOUNT - 1 : 0]                   sram_valids_ff_next;
+
+    // Cache's SRAM interface signals
+    logic                      sram_ce;
+    logic                      sram_we;
+    logic [ADDR_WIDTH - 1 : 0] sram_addr;
+    logic [CELL_WIDTH - 1 : 0] sram_rdata;
+    logic [CELL_WIDTH - 1 : 0] sram_wdata;
 
     logic [TAG_FIELD_WIDTH - 1 : 0]          tag;
     logic [TAG_FIELD_WIDTH - 1 : 0]          tag_ff;
@@ -84,6 +95,38 @@ module cache #(
     logic [READ_LATENCY - 1 : 0]             hit_valid_shift_ff; // hit_valid shift reg
     logic [DATA_WIDTH - 1 : 0]               data_ff;
     logic [DATA_WIDTH - 1 : 0]               data_ff_next;
+
+    // ------------------------------------------------------------------------
+    // -- Instances
+    // ------------------------------------------------------------------------
+
+    cache_sram_model #(
+        .CELL_AMOUNT(CELL_AMOUNT),
+        .ADDR_WIDTH (ADDR_WIDTH),
+        .CELL_WIDTH (CELL_WIDTH)
+    ) u_cache_sram (
+        .clk_i  (clk_i),
+        .ce_i   (sram_ce),
+        .we_i   (sram_we),
+        .addr_i (sram_addr),
+        .data_i (sram_wdata),
+        .data_o (sram_rdata)
+    );
+
+    // // Valid logic
+    // always_ff @(posedge clk_i) begin
+    //     if(!rstn_i) begin
+    //         sram_valids_ff <= '0;
+    //     end else begin
+    //         sram_valids_ff <= sram_valids_ff_next;
+    //     end
+    // end
+
+    // Cache's SRAM signals logic
+    assign sram_cell_of_curr_set = sram_rdata;
+    assign sram_ce = rstn_i;
+    assign sram_we = 1'b0;
+    assign sram_addr = addr_i;
 
     // ------------------------------------------------------------------------
     // -- Read logic
@@ -113,46 +156,16 @@ module cache #(
         end
     end
 
-    always_ff @(posedge clk_i) begin : sram_valids_ff_seq_logic
-        for(int way = 0; way < WAYS; way++) begin
-            if(!rstn_i) begin
-                // No reset for sram_valids_ff[way] registers
-            end else begin
-                sram_valids_ff[way] <= sram[set][way].valid;
-            end
-        end
-    end
-
-    always_ff @(posedge clk_i) begin : sram_tags_ff_seq_logic
-        for(int way = 0; way < WAYS; way++) begin
-            if(!rstn_i) begin
-                // No reset for sram_tags_ff[way] registers
-            end else begin
-                sram_tags_ff[way] <= sram[set][way].tag;
-            end
-        end
-    end
-
-    always_ff @(posedge clk_i) begin : ways_data_seq_logic
-        for(int way = 0; way < WAYS; way++) begin
-            if(!rstn_i) begin
-                // No reset for ways_data[way] registers
-            end else begin
-                ways_data[way] <= (sram[set][way].data);
-            end
-        end
-    end
-
     always_comb begin : ways_hits_comb_logic
         for(int way = 0; way < WAYS; way++) begin
-            ways_hits[way] = (sram_tags_ff[way] == tag_ff) & (sram_valids_ff[way]);
+            ways_hits[way] = (sram_cell_of_curr_set[way].tag == tag_ff) & (sram_valids_ff[set_ff * WAYS + way]);
         end
     end
 
     always_comb begin : data_ff_next_comb_logic
         for(int way = 0; way < WAYS; way++) begin
             if(ways_hits[way]) begin
-                data_ff_next = ways_data[way];
+                data_ff_next = sram_cell_of_curr_set[way].data;
                 break;
             end else begin
                 data_ff_next = data_ff;
@@ -167,18 +180,6 @@ module cache #(
             data_ff <= data_ff_next;
         end
     end
-
-    // always_ff @(posedge clk_i) begin : data_ff_seq_logic
-    //     for(int way = 0; way < WAYS; way++) begin
-    //         if(!rstn_i) begin
-    //             data_ff <= 0;
-    //         end else if(ways_hits[way]) begin
-    //             data_ff <= ways_data[way];
-    //         end else begin
-    //             data_ff <= data_ff;
-    //         end
-    //     end
-    // end
 
     always_ff @(posedge clk_i) begin : hit_valid_shift_ff_seq_logic
         if(!rstn_i) begin

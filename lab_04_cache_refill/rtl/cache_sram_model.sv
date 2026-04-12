@@ -1,7 +1,3 @@
-import cache_param_pkg::CELL_AMOUNT;
-import cache_param_pkg::ADDR_WIDTH;
-import cache_param_pkg::CELL_WIDTH;
-
 module cache_sram_model #(
     CELL_AMOUNT = 8,
     ADDR_WIDTH  = 30,

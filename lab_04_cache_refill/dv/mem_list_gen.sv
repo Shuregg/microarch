@@ -1,13 +1,12 @@
 class mem_list_gen #(
     parameter TAG_WIDTH,
     parameter DATA_WIDTH,
-    parameter CELL_AMOUNT // ways * sets
+    parameter CELL_AMOUNT // sets
 );
 
-    localparam CELL_WIDTH = 1 + TAG_WIDTH + DATA_WIDTH;
+    localparam CELL_WIDTH = TAG_WIDTH + DATA_WIDTH;
 
     typedef struct packed {
-        logic                      valid;
         logic [TAG_WIDTH  - 1 : 0] tag;
         logic [DATA_WIDTH - 1 : 0] data;
     } set_t;
@@ -30,16 +29,19 @@ class mem_list_gen #(
             $display("The file was opened successfuly: '%s'", output_file);
             $display("Starting generation...");
             for(int unsigned i = 0; i < CELL_AMOUNT; i++) begin
-                logic [CELL_WIDTH - 1 : 0] cell_val;
-                rand_cell : assert(std::randomize(cell_val) with {
-                    cell_val[CELL_WIDTH - 1] dist {
+                logic                      cell_valid
+                logic [CELL_WIDTH - 1 : 0] cell_value;
+                rand_cell_valid : assert(std::randomize(cell_valid) with {
+                    cell_valid dist {
                         1'b1 :/ valid_prob,
                         1'b0 :/ 100 - valid_prob
                     };
                 });
-                generated_data[i] = cell_val;
+                rand_cell_value : assert (std::randomize(cell_value))
+                cell_valids[i]    = cell_valid;
+                generated_data[i] = cell_value;
                 if(use_separator) begin
-                    string cell_formated = format_with_sep(cell_val, radix);
+                    string cell_formated = format_with_sep(cell_value, radix);
                     if(cell_formated == "") begin
                         exit_status = 0;
                         break;
@@ -48,10 +50,10 @@ class mem_list_gen #(
                     end
                 end else begin
                     case(radix)
-                        "%b", "%0b", "b", "bin": $fdisplayb(fd, cell_val);
-                        "%o", "%0o", "o", "oct": $fdisplayo(fd, cell_val);
-                        "%d", "%0d", "d", "dec": $fdisplay (fd, cell_val);
-                        "%h", "%0h", "h", "hex": $fdisplayh(fd, cell_val);
+                        "%b", "%0b", "b", "bin": $fdisplayb(fd, cell_value);
+                        "%o", "%0o", "o", "oct": $fdisplayo(fd, cell_value);
+                        "%d", "%0d", "d", "dec": $fdisplay (fd, cell_value);
+                        "%h", "%0h", "h", "hex": $fdisplayh(fd, cell_value);
                         default: begin
                             $error("generate_file: unsupported radix '%s'. Use 'bin', 'oct', 'dec', 'hex' or relative format specifiers.", radix);
                             exit_status = 0;
@@ -67,7 +69,9 @@ class mem_list_gen #(
         return exit_status;
     endfunction : generate_file
 
-    function void get_generated_cells(ref logic [CELL_WIDTH - 1 : 0] generated_cells[CELL_AMOUNT]);
+    function void get_generated_cells(
+        ref logic [CELL_AMOUNT - 1 : 0] cell_valids,
+        ref logic [CELL_WIDTH - 1 : 0] generated_cells[CELL_AMOUNT]);
         for(int unsigned i = 0; i < CELL_AMOUNT; i++)
             generated_cells[i] = generated_data[i];
     endfunction
