@@ -41,7 +41,6 @@ class mem_list_gen #(
                 rand_cell_value : assert(std::randomize(cell_value));
                 generated_data[i] = cell_value;
                 generated_valids[i] = cell_valids;
-                $display("DEBUG %0d", i);
                 case(radix)
                     "%b", "%0b", "b", "bin": $fdisplayb(fd, cell_value);
                     "%o", "%0o", "o", "oct": $fdisplayo(fd, cell_value);

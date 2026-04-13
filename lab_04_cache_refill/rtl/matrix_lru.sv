@@ -26,8 +26,10 @@ module matrix_lru #(
             lru_way_comb = '0;
             matrix_next  = '0;
         end else begin
-            // Determine the way to be updated
+            logic [WAYS - 1:0] is_lru;
             logic [WAY_IDX_WIDTH-1:0] update_way;
+
+            // Determine the way to be updated
             if (en_i) begin
                 if (hit_i)
                     update_way = hit_way_i;
@@ -42,7 +44,8 @@ module matrix_lru #(
             if (en_i) begin
                 for (int i = 0; i < WAYS - 1; i++) begin
                     for (int j = i + 1; j < WAYS; j++) begin
-                        int idx = get_index(i, j);
+                        int idx;
+                        idx = get_index(i, j);
                         if (i == update_way)
                             matrix_next[idx] = 1'b1;   // update_way is newer than j
                         else if (j == update_way)
@@ -52,7 +55,6 @@ module matrix_lru #(
             end
 
             // Make desicion (find LRU way)
-            logic [WAYS - 1:0] is_lru;
             for (int w = 0; w < WAYS; w++) begin
                 logic less_than_all = 1'b1;
                 for (int j = 0; j < WAYS; j++) begin

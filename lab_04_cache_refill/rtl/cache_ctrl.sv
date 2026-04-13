@@ -117,11 +117,11 @@ module cache_ctrl #(
     logic [CELL_WIDTH - 1 : 0] sram_wdata_ff_next;
     logic [CELL_WIDTH - 1 : 0] sram_rdata_ff;
     logic [CELL_WIDTH - 1 : 0] sram_rdata_ff_next;
-    logic                      sram_rdata_ff_en
+    logic                      sram_rdata_ff_en;
 
     // Address shift register with depth = 4
     logic [SHIFT_REG_DEPTH - 1 : 0][ADDR_WIDTH      - 1 : 0] addr_shift_ff;
-    logic                                                    addr_shift_ff_en
+    logic                                                    addr_shift_ff_en;
     logic [SHIFT_REG_DEPTH - 1 : 0][TAG_FIELD_WIDTH - 1 : 0] decoded_tag;
     logic [SHIFT_REG_DEPTH - 1 : 0][SET_FIELD_WIDTH - 1 : 0] decoded_set;
 
@@ -147,7 +147,7 @@ module cache_ctrl #(
     logic                                    m_valid_ff;
     logic                                    m_valid_ff_next;
 
-    logic                                    ext_mem_req_ff
+    logic                                    ext_mem_req_ff;
     logic                                    ext_mem_req_ff_next;
     logic                                    ext_mem_ack;
     logic [DATA_WIDTH - 1 : 0]               ext_mem_data;
@@ -189,6 +189,7 @@ module cache_ctrl #(
     endgenerate
 
     assign ext_mem_ack = ext_mem_ack_i;
+    assign ext_mem_req_o = ext_mem_req_ff;
 
     // assign s_ready_o = 
 
@@ -210,6 +211,7 @@ module cache_ctrl #(
         sram_we_ff_next         = '0;
         sram_addr_ff_next       = '0;
         sram_wdata_ff_next      = '0;
+        sram_valids_ff_next     = sram_valids_ff;
 
         data_ff_next            = '0;
 
@@ -362,8 +364,6 @@ module cache_ctrl #(
 
     // Cache's SRAM signals logic
     assign sram_cell_of_curr_set = sram_rdata_i;
-    assign sram_addr_ff;
-    // assign sram_addr_ff_next;
 
     // Read logic
     assign hit_o       = hit_ff;
