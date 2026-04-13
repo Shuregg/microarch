@@ -25,6 +25,7 @@ package cache_param_pkg;
     localparam CELL_WIDTH   = WAYS * (TAG_WIDTH + DATA_WIDTH);
 
     // Refill parameters
-    localparam WAY_CNT_WIDTH = (WAYS != 1) ? $clog2(WAYS) : 1;
+    localparam WAY_IDX_WIDTH  = (WAYS > 1) ? $clog2(WAYS) : 1;
+    localparam MATRIX_BITS = (WAYS > 1) ? WAYS * (WAYS - 1) / 2 : 1;
 
 endpackage

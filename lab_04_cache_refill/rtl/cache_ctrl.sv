@@ -154,9 +154,39 @@ module cache_ctrl #(
     logic [ADDR_WIDTH - 1 : 0]               ext_mem_addr_ff;
     logic [ADDR_WIDTH - 1 : 0]               ext_mem_addr_ff_next;
 
+    logic [WAY_IDX_WIDTH - 1 : 0]                      way_hit_num_of_curr_set;
+    sram_cell_t [WAYS - 1: 0]                          refilled_sram_cell_ff;
+    sram_cell_t [WAYS - 1: 0]                          refilled_sram_cell_ff_next;
+    logic [CELL_AMOUNT - 1 : 0][MATRIX_BITS - 1 : 0]   lru_matrix_ff;
+    logic [CELL_AMOUNT - 1 : 0][MATRIX_BITS - 1 : 0]   lru_matrix_next;
+    logic [CELL_AMOUNT - 1 : 0]                        lru_update_en;
+    logic [CELL_AMOUNT - 1 : 0]                        lru_hit;
+    logic [CELL_AMOUNT - 1 : 0][WAY_IDX_WIDTH - 1 : 0] lru_hit_way;
+    logic [CELL_AMOUNT - 1 : 0][WAY_IDX_WIDTH - 1 : 0] lru_way;
+
+    logic [WAY_IDX_WIDTH - 1 : 0] replaced_way_ff;
+    logic [WAY_IDX_WIDTH - 1 : 0] replaced_way_ff_next;
+    logic [WAY_IDX_WIDTH - 1 : 0] replaced_way_ff_en;
+
     // ------------------------------------------------------------------------
     // -- Instances
     // ------------------------------------------------------------------------
+
+    genvar set_idx;
+    generate
+        for (set_idx = 0; set_idx < CELL_AMOUNT; set_idx++) begin : lru_gen
+            matrix_lru #(
+                .WAYS (WAYS)
+            ) u_matrix_lru (
+                .clk_i      (clk_i),
+                .rstn_i     (rstn_i),
+                .en_i       (lru_update_en[set_idx]),
+                .hit_i      (lru_hit[set_idx]),
+                .hit_way_i  (lru_hit_way[set_idx]),
+                .lru_way_o  (lru_way[set_idx])
+            );
+        end
+    endgenerate
 
     assign ext_mem_ack = ext_mem_ack_i;
 
@@ -178,7 +208,7 @@ module cache_ctrl #(
     always_comb begin
         sram_ce_ff_next         = '0;
         sram_we_ff_next         = '0;
-        sram_addr_ff_next       = '0
+        sram_addr_ff_next       = '0;
         sram_wdata_ff_next      = '0;
 
         data_ff_next            = '0;
@@ -192,6 +222,15 @@ module cache_ctrl #(
 
         addr_shift_ff_en        = 1'b1;
         sram_rdata_ff_en        = 1'b1;
+
+        lru_update_en           = '0;
+        lru_hit                 = '0;
+        lru_hit_way             = '0;
+        way_hit_num_of_curr_set = '0;
+
+        replaced_way_ff_en      = '0;
+
+        refilled_sram_cell_ff_next = sram_cell_of_curr_set;
 
         case (state_ff)
             RESET,
@@ -215,19 +254,27 @@ module cache_ctrl #(
                         if (ways_hits[way]) begin
                             data_ff_next = sram_cell_of_curr_set[way].data;
                             hit_valid_ff_next = 1'b1;
+                            // Determine the number (index) of way with hit
+                            way_hit_num_of_curr_set = way[WAY_IDX_WIDTH - 1 : 0];
                             break;
                         end
                     end
 
+                    // Update LRU matrix
+                    lru_update_en [decoded_set[1]] = 1'b1;
+                    lru_hit       [decoded_set[1]] = 1'b1;
+                    lru_hit_way   [decoded_set[1]] = way_hit_num_of_curr_set;
+
+                    // If new request received -> go to SRAM_REQ state
                     if(s_hs) begin
-                        state_ff_next = SRAM_REQ;
-                        sram_ce       = 1'b1;
-                        sram_addr     = addr_i;
+                        state_ff_next     = SRAM_REQ;
+                        sram_ce_ff_next   = 1'b1;
+                        sram_addr_ff_next = addr_i;
                     end else begin
                         state_ff_next = IDLE;
                     end
                 end else begin
-                    state_ff_next = EXT_MEM_REQ;
+                    state_ff_next        = EXT_MEM_REQ;
                     sram_rdata_ff_en     = 1'b0; // Do not update rdata.
                                                  // It will be used for evicting.
 
@@ -236,6 +283,10 @@ module cache_ctrl #(
                                                  // external memory
 
                     addr_shift_ff_en     = 1'b0; // Do not shift
+
+                    lru_update_en [decoded_set[1]] = 1'b1;
+                    lru_hit       [decoded_set[1]] = 1'b0; // Miss
+                    // lru_hit_way is no matter when miss
 
                     ext_mem_req_ff_next  = 1;
                     ext_mem_addr_ff_next = addr_shift_ff[1];
@@ -252,23 +303,30 @@ module cache_ctrl #(
                 ext_mem_addr_ff_next = addr_shift_ff[1];
                 sram_rdata_ff_en     = 1'b0; // Do not update rdata.
                 addr_shift_ff_en     = 1'b0; // Do not shift
+                s_ready_ff_next      = 1'b0;
+
+                replaced_way_ff_en   = 1;
+                replaced_way_ff_next = lru_way[decoded_set[1]];
             end
             EXT_MEM_ACK: begin
                 if(ext_mem_ack) begin
-                    state_ff_next   = EVICT;
+                    state_ff_next                                        = EVICT;
 
-                    sram_ce_ff_next      = 1'b1;
-                    sram_we_ff_next      = 1'b1;
-                    sram_addr_ff_next    = addr_shift_ff[1];
+                    s_ready_ff_next                                      = 1'b0;
 
-                    // TODO implement refill algorithm
-                    // TODO calculate LRU way number (index)
-                    // TODO you should use delayed sram_rdata_ff here
-                    // TODO modify sram_rdata_ff with replaced way
-                    sram_wdata_ff_next   = 
+                    sram_ce_ff_next                                      = 1'b1;
+                    sram_we_ff_next                                      = 1'b1;
+                    sram_addr_ff_next                                    = addr_shift_ff[1];
+                    refilled_sram_cell_ff_next[replaced_way_ff].tag      = decoded_tag[1];
+                    refilled_sram_cell_ff_next[replaced_way_ff].data     = ext_mem_data;
+                    sram_wdata_ff_next                                   = refilled_sram_cell_ff_next;
+                    sram_valids_ff_next[decoded_set[1]][replaced_way_ff] = 1'b1;
 
-                    data_ff_next         = ext_mem_data;
-                    addr_shift_ff_en     = 1'b1;
+                    data_ff_next                                         = ext_mem_data;
+                    addr_shift_ff_en                                     = 1'b1; // ???
+
+                    // lru_update_en [decoded_set[1]] = 1'b1;
+                    // lru_hit       [decoded_set[1]] = 1'b0;
                 end else begin
                     state_ff_next        = EXT_MEM_ACK;
                     sram_rdata_ff_en     = 1'b0; // Do not update rdata.
@@ -277,7 +335,14 @@ module cache_ctrl #(
                 end
             end
             EVICT: begin
-                if(s_hs)
+                s_ready_ff_next = 1'b1;
+                if(s_valid_i) begin
+                    state_ff_next     = SRAM_REQ;
+                    sram_ce_ff_next   = 1'b1;
+                    sram_addr_ff_next = addr_i;
+                end else begin
+                    state_ff_next     = IDLE;
+                end
             end
         endcase
     end
@@ -290,7 +355,6 @@ module cache_ctrl #(
         end
     end
 
-    assign sram_rdata_ff_next = sram_rdata_i;
     assign sram_ce_o    = sram_ce_ff;
     assign sram_we_o    = sram_we_ff;
     assign sram_addr_o  = sram_addr_ff;
@@ -298,9 +362,6 @@ module cache_ctrl #(
 
     // Cache's SRAM signals logic
     assign sram_cell_of_curr_set = sram_rdata_i;
-    assign sram_ce = rstn_i;
-    assign sram_we = 1'b0;
-    assign sram_addr = sram_addr_ff;
     assign sram_addr_ff;
     // assign sram_addr_ff_next;
 
@@ -416,11 +477,36 @@ module cache_ctrl #(
             sram_wdata_ff <= sram_wdata_ff_next;
         end
     end
+
+    // always_ff @(posedge clk_i) begin
+    //     if (!rstn_i) begin
+    //         sram_rdata_ff <= '0;
+    //     end else if (sram_rdata_ff_en) begin
+    //         sram_rdata_ff <= sram_rdata_ff_next;
+    //     end
+    // end
+
     always_ff @(posedge clk_i) begin
         if (!rstn_i) begin
-            sram_rdata_ff <= '0;
-        end else if (sram_rdata_ff_en) begin
-            sram_rdata_ff <= sram_rdata_ff_next;
+            sram_valids_ff <= '0;
+        end else begin
+            sram_valids_ff <= sram_valids_ff_next;
+        end
+    end
+
+    always_ff @(posedge clk_i) begin
+        if (!rstn_i) begin
+            replaced_way_ff <= '0;
+        end else if(replaced_way_ff_en) begin
+            replaced_way_ff <= replaced_way_ff_next;
+        end
+    end
+
+    always_ff @(posedge clk_i) begin
+        if (!rstn_i) begin
+            refilled_sram_cell_ff <= '0;
+        end else begin
+            refilled_sram_cell_ff <= refilled_sram_cell_ff_next;
         end
     end
 

@@ -26,6 +26,7 @@ XRUN_OPTS:= \
     ${RTL_PATH}/cache_param_pkg.sv \
 	${TB_PATH}/tb_cache.sv \
     ${RTL_PATH}/cache_sram_model.sv \
+    ${RTL_PATH}/matrix_lru.sv \
 	${RTL_PATH}/cache_ctrl.sv \
 	${RTL_PATH}/cache_top.sv
 
