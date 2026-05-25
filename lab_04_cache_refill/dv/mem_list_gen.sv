@@ -1,8 +1,8 @@
 class mem_list_gen #(
-    parameter TAG_WIDTH,
-    parameter DATA_WIDTH,
-    parameter CELL_AMOUNT, // sets
-    parameter WAY_AMOUNT
+    TAG_WIDTH,
+    DATA_WIDTH,
+    CELL_AMOUNT, // sets
+    WAY_AMOUNT
 );
 
     localparam CELL_WIDTH = TAG_WIDTH + DATA_WIDTH;
@@ -18,7 +18,6 @@ class mem_list_gen #(
     function int generate_file(
         string output_file   = "./mem_ini.list",
         string radix         = "%b",
-        bit    use_separator = 0,
         int    valid_prob    = 85
     );
         int exit_status = 1;
@@ -42,27 +41,18 @@ class mem_list_gen #(
                 rand_cell_value : assert(std::randomize(cell_value));
                 generated_data[i] = cell_value;
                 generated_valids[i] = cell_valids;
-                if(use_separator) begin
-                    string cell_formated = format_with_sep(cell_value, radix);
-                    if(cell_formated == "") begin
+                $display("DEBUG %0d", i);
+                case(radix)
+                    "%b", "%0b", "b", "bin": $fdisplayb(fd, cell_value);
+                    "%o", "%0o", "o", "oct": $fdisplayo(fd, cell_value);
+                    "%d", "%0d", "d", "dec": $fdisplay (fd, cell_value);
+                    "%h", "%0h", "h", "hex": $fdisplayh(fd, cell_value);
+                    default: begin
+                        $error("generate_file: unsupported radix '%s'. Use 'bin', 'oct', 'dec', 'hex' or relative format specifiers.", radix);
                         exit_status = 0;
                         break;
-                    end else begin
-                        $fwrite(fd, cell_formated, "\n");
                     end
-                end else begin
-                    case(radix)
-                        "%b", "%0b", "b", "bin": $fdisplayb(fd, cell_value);
-                        "%o", "%0o", "o", "oct": $fdisplayo(fd, cell_value);
-                        "%d", "%0d", "d", "dec": $fdisplay (fd, cell_value);
-                        "%h", "%0h", "h", "hex": $fdisplayh(fd, cell_value);
-                        default: begin
-                            $error("generate_file: unsupported radix '%s'. Use 'bin', 'oct', 'dec', 'hex' or relative format specifiers.", radix);
-                            exit_status = 0;
-                            break;
-                        end
-                    endcase
-                end
+                endcase
             end
             if(exit_status)
                 $display("Generation has been completed: %s", output_file);
@@ -81,53 +71,5 @@ class mem_list_gen #(
         end
     endfunction
 
-    function automatic string add_separators(string s, int group_size);
-        int len = s.len();
-        string result = "";
-        int cnt = 0;
-        for (int i = len-1; i >= 0; i--) begin
-            if ((cnt == group_size - 1) && (i != 0)) begin
-                result = {"_", s[i], result};
-                cnt = 0;
-            end else begin
-                result = {s[i], result};
-                cnt++;
-            end
-        end
-        return result;
-    endfunction
-
-    function automatic string format_with_sep (
-        input logic [CELL_WIDTH - 1 : 0] value,
-        input string radix
-    );
-        string str;
-        int group_size;
-
-        radix = radix.tolower();
-        case(radix)
-            "%b", "%0b", "b", "bin": begin
-                str = (radix == "%0b") ? $sformatf("%0b", value) : $sformatf("%b", value);
-                group_size = 8;
-            end
-            "%o", "%0o", "o", "oct": begin
-                str = (radix == "%0o") ? $sformatf("%0o", value) : $sformatf("%o", value);
-                group_size = 3;
-            end
-            "%d", "%0d", "d", "dec": begin
-                str = (radix == "%0d") ? $sformatf("%0d", value) : $sformatf("%d", value);
-                group_size = 3;
-            end
-            "%h", "%0h", "h", "hex": begin
-                str = (radix == "%0h") ? $sformatf("%0h", value) : $sformatf("%h", value);
-                group_size = 4;
-            end
-            default: begin
-                $error("format_with_sep: unsupported radix '%s'. Use 'bin', 'oct', 'dec', 'hex' or relative format specifiers.", radix);
-                return "";
-            end
-        endcase
-        return add_separators(str, group_size);
-    endfunction
-
 endclass : mem_list_gen
+

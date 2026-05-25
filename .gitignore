@@ -5,3 +5,14 @@ waves.shm
 .simvision
 xrun.key
 *.svwf
+*.cache
+*.hw
+*.ip_user_files
+*.runs
+*.sim
+*.xpr
+*.xdc
+*.err
+*.bpad
+*.diag
+*cache_ini.list
