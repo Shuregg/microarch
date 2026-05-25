@@ -12,3 +12,7 @@ xrun.key
 *.sim
 *.xpr
 *.xdc
+*.err
+*.bpad
+*.diag
+*cache_ini.list
