@@ -6,8 +6,7 @@ export TB_PATH:=$(PROJECT_PATH)/dv
 export RTL_PATH:=$(PROJECT_PATH)/rtl
 export CACHE_TYPE?=DIRECT_MAPPED_CACHE
 
-USER_DEFINES:= \
-	-define CACHE_INI_FILE="${TB_PATH}/cache_ini.list" \
+USER_DEFINES:=
 
 ifneq ($(filter $(CACHE_TYPE),DIRECT_MAPPED_CACHE FOUR_WAY_SET_ASSOCIATIVE_CACHE FULLY_ASSOCIATIVE_CACHE),)
 	USER_DEFINES += -define ${CACHE_TYPE}
@@ -22,7 +21,6 @@ XRUN_OPTS:= \
 	-seed ${SEED} \
 	${USER_DEFINES} \
     -incdir ${TB_PATH} \
-	${TB_PATH}/mem_list_gen.sv \
     ${RTL_PATH}/cache_param_pkg.sv \
 	${TB_PATH}/tb_cache.sv \
     ${RTL_PATH}/cache_sram_model.sv \

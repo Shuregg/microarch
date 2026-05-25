@@ -4,38 +4,22 @@ import cache_param_pkg::*;
 
 module tb_cache();
 
-    `define STRINGIFY(DEFINE) `"DEFINE`"
+    parameter int CLK_PERIOD           = 2;
+    parameter int RESPONSE_TIMEOUT     = 200;
+    parameter int DEFAULT_EXT_MEM_WAIT = 3;
 
-    parameter  CLK_PERIOD = 1;
-    parameter  RTL_READ_LATENCY = 2;
+    typedef logic [ADDR_WIDTH - 1 : 0] addr_t;
+    typedef logic [DATA_WIDTH - 1 : 0] data_t;
+    typedef logic [TAG_WIDTH  - 1 : 0] tag_t;
+    typedef logic [SET_WIDTH  - 1 : 0] set_idx_t;
 
-    typedef struct packed {
-        logic [TAG_WIDTH  - 1 : 0] tag;
-        logic [DATA_WIDTH - 1 : 0] data;
-    } set_t;
+    int unsigned error_cnt       = 0;
+    int unsigned ext_mem_req_cnt = 0;
+    int unsigned ext_mem_delay   = DEFAULT_EXT_MEM_WAIT;
+    bit          ext_mem_req_prev;
 
-
-    // TB variables
-    logic [CELL_AMOUNT - 1 : 0][WAYS - 1 : 0] expected_valids;
-    set_t [CELL_AMOUNT - 1 : 0][WAYS - 1 : 0] expected_cells;
-
-
-    int unsigned error_cnt = 0;
-    bit          is_hit_valid_timeout = 0;
-
-    logic                      clk;
-    logic                      rstn;
-    logic                      valid;
-    logic [TAG_WIDTH  - 1 : 0] tag;
-    logic [SET_WIDTH  - 1 : 0] set;
-    logic [DATA_WIDTH - 1 : 0] data_exp;
-    logic [DATA_WIDTH - 1 : 0] data_rec;
-    logic                      hit_exp;
-    logic                      hit_rec;
-
-    string cache_ini_file = `STRINGIFY(`CACHE_INI_FILE);
-
-    mem_list_gen #(TAG_WIDTH, DATA_WIDTH, CELL_AMOUNT, WAYS) mem_list_gen_h;
+    logic clk;
+    logic rstn;
 
     // Interface signals
     cache_if #(ADDR_WIDTH, DATA_WIDTH) cache_if_h (
@@ -72,185 +56,404 @@ module tb_cache();
         .ext_mem_ack_i  (cache_if_h.ext_mem_ack)
     );
 
-    task automatic reset_gen();
-        rstn <= 1'b0;
-        #(5*CLK_PERIOD);
-        rstn <= 1'b1;
-    endtask : reset_gen
-
-    task automatic compare_hit_and_data(
-        logic                      hit_rec,
-        logic                      hit_exp,
-        logic [DATA_WIDTH - 1 : 0] data_rec,
-        logic [DATA_WIDTH - 1 : 0] data_exp
+    function automatic addr_t make_addr(
+        input tag_t    tag_value,
+        input set_idx_t set_value
     );
-        if(hit_rec === hit_exp) begin
-            $display("[%0t] Right 'hit_o'  value. Received: %0b",
-                $time(), hit_rec);
-            if(hit_rec) begin
-                if(data_rec === data_exp) begin
-                    $display("[%0t] Right 'data_o' value. Received: 0x%x",
-                        $time(), data_rec);
-                end else begin
-                    error_cnt++;
-                    $error("[%0t] Wrong 'data_o' value. Received: 0x%x, Expected: 0x%x (#%0d)",
-                        $time(), data_rec, data_exp, error_cnt);
-                end
-            end
+        if(SETS == 1) begin
+            make_addr = tag_value;
         end else begin
-            error_cnt++;
-            $error("[%0t] Wrong 'hit_o' value. Received = %0b, expected = %0b. (#%0d)",
-                $time(), hit_rec, hit_exp, error_cnt);
-       end
-    endtask : compare_hit_and_data
+            make_addr = {tag_value, set_value};
+        end
+    endfunction
 
-    task automatic check_cache_hit();
-        for(int unsigned i = 0; i < SETS; i++) begin
-            for(int unsigned j = 0; j < WAYS; j++) begin
-                int unsigned cell_idx = (i * WAYS + j);
-                $display("");
-                set      = i;
-                tag      = expected_cells[i][j].tag;
-                data_exp = expected_cells[i][j].data;
-                valid    = expected_valids[i][j];
-                hit_exp  = valid;
+    function automatic set_idx_t test_set(input int unsigned idx);
+        if(SETS == 1) begin
+            test_set = '0;
+        end else begin
+            test_set = set_idx_t'(idx % SETS);
+        end
+    endfunction
 
-                if(SETS != 1)
-                    cache_vif_h.addr <= {tag, set};
-                else
-                    cache_vif_h.addr <= tag;
+    function automatic tag_t test_tag(input int unsigned idx);
+        test_tag = tag_t'(idx + 1);
+    endfunction
 
-                repeat(RTL_READ_LATENCY)
-                    @(posedge cache_vif_h.clk);
-                is_hit_valid_timeout = 0;
-                fork
-                    fork
-                        wait(cache_vif_h.hit_valid === 1'b1);
-                        begin
-                            repeat(4)
-                                @(posedge cache_vif_h.clk)
-                            is_hit_valid_timeout = 1;
-                        end
-                    join_any
-                    disable fork;
-                join
+    function automatic data_t ext_mem_data_for_addr(input addr_t addr);
+        ext_mem_data_for_addr = data_t'(addr) ^ data_t'(32'hcace_0001);
+    endfunction
 
-                @(negedge cache_vif_h.clk);
-                hit_rec  = cache_vif_h.hit;
-                data_rec = cache_vif_h.data;
+    task automatic report_error(input string msg);
+        error_cnt++;
+        $error("[%0t] %s (#%0d)", $time(), msg, error_cnt);
+    endtask
 
-                if(is_hit_valid_timeout) begin
-                    error_cnt++;
-                    $error("[%0t] Cannot wait for high value of 'hit_valid_o'. Received: %0b. (#%0d)",
-                        $time(), cache_vif_h.hit_valid, error_cnt);
-                end else begin
-                    compare_hit_and_data(hit_rec, hit_exp, data_rec, data_exp);
-                end
+    task automatic wait_for_s_ready(input int unsigned timeout = RESPONSE_TIMEOUT);
+        int unsigned cycles = 0;
+        while(cache_vif_h.s_ready !== 1'b1) begin
+            @(negedge cache_vif_h.clk);
+            cycles++;
+            if(cycles >= timeout) begin
+                report_error("Timeout while waiting for s_ready_o");
+                break;
             end
         end
-    endtask : check_cache_hit
+    endtask
 
-   task automatic check_cache_miss(int unsigned checks = 10);
-        for(int unsigned set = 0; set < SETS; set++) begin
-            for(int i = 0; i < checks; i++) begin
-                $display("");
-                rand_tag : assert(std::randomize(tag));
-                hit_exp = 0;
-                for(int j = 0; j < CELL_AMOUNT; j++) begin
-                    bit tag_match = 0;
-                    for(int k = 0; k < WAYS; k++) begin
-                        logic [SET_WIDTH  - 1 : 0] set_tmp = i;
-                        logic [TAG_WIDTH  - 1 : 0] tag_tmp = expected_cells[j][k].tag;
-                        logic [DATA_WIDTH - 1 : 0] dat_tmp = expected_cells[j][k].data;
-                        if((tag === tag_tmp) && (j / WAYS == set)) begin
-                            hit_exp = 1;
-                            data_exp = dat_tmp;
-                            tag_match = 1;
-                            break;
-                        end else begin
-                            hit_exp = 0;
-                        end
-                    end
+    task automatic apply_reset();
+        @(negedge cache_vif_h.clk);
+        cache_vif_h.s_valid      <= 1'b0;
+        cache_vif_h.addr         <= '0;
+        cache_vif_h.m_ready      <= 1'b1;
+        cache_vif_h.ext_mem_ack  <= 1'b0;
+        cache_vif_h.ext_mem_data <= '0;
+        rstn                     <= 1'b0;
 
-                end
+        repeat(5) @(posedge cache_vif_h.clk);
 
-                cache_vif_h.addr <= {tag, set};
-                repeat(RTL_READ_LATENCY)
-                    @(posedge cache_vif_h.clk);
-                is_hit_valid_timeout = 0;
-                fork
-                    fork
-                        wait(cache_vif_h.hit_valid === 1'b1);
-                        #(4 * CLK_PERIOD) is_hit_valid_timeout = 1;
-                    join_any
-                    disable fork;
-                join
+        @(negedge cache_vif_h.clk);
+        rstn <= 1'b1;
+        wait_for_s_ready(RESPONSE_TIMEOUT);
+    endtask
 
-                @(negedge cache_vif_h.clk);
-                hit_rec  = cache_vif_h.hit;
-                data_rec = cache_vif_h.data;
+    task automatic send_read_request(input addr_t req_addr);
+        @(negedge cache_vif_h.clk);
+        cache_vif_h.addr    <= req_addr;
+        cache_vif_h.s_valid <= 1'b1;
 
-                if(is_hit_valid_timeout) begin
-                    error_cnt++;
-                    $error("[%0t] Cannot wait for high value of 'hit_valid_o'. Received: %0b. (#%0d)",
-                        $time(), cache_vif_h.hit_valid, error_cnt);
-                end else begin
-                    compare_hit_and_data(hit_rec, hit_exp, data_rec, data_exp);
-                end
-                if(hit_exp)
-                    checks++; // Because we want to check cache misses
+        forever begin
+            if(cache_vif_h.s_ready === 1'b1) begin
+                @(posedge cache_vif_h.clk);
+                break;
+            end
+            @(negedge cache_vif_h.clk);
+        end
+
+        @(negedge cache_vif_h.clk);
+        cache_vif_h.s_valid <= 1'b0;
+    endtask
+
+    task automatic wait_for_response(
+        output logic hit,
+        output data_t data,
+        input  int unsigned timeout = RESPONSE_TIMEOUT,
+        input  bit consume_response = 1'b1
+    );
+        int unsigned cycles = 0;
+
+        while(cache_vif_h.m_valid !== 1'b1) begin
+            @(posedge cache_vif_h.clk);
+            cycles++;
+            if(cycles >= timeout) begin
+                report_error("Timeout while waiting for m_valid_o");
+                break;
             end
         end
-    endtask : check_cache_miss
+
+        @(negedge cache_vif_h.clk);
+        hit  = cache_vif_h.hit;
+        data = cache_vif_h.data;
+
+        if(cache_vif_h.hit_valid !== cache_vif_h.m_valid) begin
+            report_error("hit_valid_o is not aligned with m_valid_o");
+        end
+
+        if(consume_response) begin
+            @(posedge cache_vif_h.clk);
+        end
+    endtask
+
+    task automatic check_read(
+        input addr_t req_addr,
+        input bit    exp_hit,
+        input string check_name = ""
+    );
+        logic        hit_rec;
+        data_t       data_rec;
+        data_t       data_exp;
+        int unsigned req_cnt_before;
+        int unsigned req_delta;
+
+        data_exp       = ext_mem_data_for_addr(req_addr);
+        req_cnt_before = ext_mem_req_cnt;
+
+        send_read_request(req_addr);
+        wait_for_response(hit_rec, data_rec);
+
+        req_delta = ext_mem_req_cnt - req_cnt_before;
+
+        if(hit_rec !== exp_hit) begin
+            report_error($sformatf("%s: wrong hit value. received=%0b expected=%0b",
+                check_name, hit_rec, exp_hit));
+        end
+
+        if(data_rec !== data_exp) begin
+            report_error($sformatf("%s: wrong data value. received=0x%x expected=0x%x",
+                check_name, data_rec, data_exp));
+        end
+
+        if(req_delta != (exp_hit ? 0 : 1)) begin
+            report_error($sformatf("%s: wrong ext_mem_req pulse count. received=%0d expected=%0d",
+                check_name, req_delta, (exp_hit ? 0 : 1)));
+        end
+    endtask
+
+    task automatic check_delayed_miss_stall();
+        addr_t       req_addr;
+        logic        hit_rec;
+        data_t       data_rec;
+        int unsigned req_cnt_before;
+        int unsigned cycles;
+
+        $display("\n[%0t] CHECK: delayed miss stalls input", $time());
+        apply_reset();
+        ext_mem_delay = 6;
+        req_addr = make_addr(test_tag(10), test_set(0));
+        req_cnt_before = ext_mem_req_cnt;
+
+        send_read_request(req_addr);
+
+        cycles = 0;
+        while(cache_vif_h.m_valid !== 1'b1) begin
+            @(posedge cache_vif_h.clk);
+            cycles++;
+            @(negedge cache_vif_h.clk);
+            if(cache_vif_h.m_valid !== 1'b1 && cache_vif_h.s_ready !== 1'b0) begin
+                report_error("s_ready_o is high while delayed miss is in flight");
+            end
+            if(cycles >= RESPONSE_TIMEOUT) begin
+                report_error("Timeout in delayed miss stall check");
+                break;
+            end
+        end
+
+        hit_rec  = cache_vif_h.hit;
+        data_rec = cache_vif_h.data;
+
+        if(cache_vif_h.hit_valid !== cache_vif_h.m_valid) begin
+            report_error("hit_valid_o is not aligned with m_valid_o during delayed miss");
+        end
+
+        @(posedge cache_vif_h.clk);
+
+        if(hit_rec !== 1'b0) begin
+            report_error("Delayed first access must be reported as miss");
+        end
+        if(data_rec !== ext_mem_data_for_addr(req_addr)) begin
+            report_error("Delayed miss returned wrong data");
+        end
+        if((ext_mem_req_cnt - req_cnt_before) != 1) begin
+            report_error("Delayed miss must produce exactly one ext_mem_req pulse");
+        end
+
+        ext_mem_delay = DEFAULT_EXT_MEM_WAIT;
+    endtask
+
+    task automatic check_first_miss_then_hit();
+        addr_t req_addr;
+
+        $display("\n[%0t] CHECK: first access misses, second access hits", $time());
+        apply_reset();
+        ext_mem_delay = DEFAULT_EXT_MEM_WAIT;
+        req_addr = make_addr(test_tag(1), test_set(0));
+
+        check_read(req_addr, 1'b0, "first access");
+        check_read(req_addr, 1'b1, "second access");
+    endtask
+
+    task automatic check_invalid_first_replacement();
+        tag_t     tags [0 : WAYS - 1];
+        set_idx_t set_value;
+        addr_t    req_addr;
+
+        $display("\n[%0t] CHECK: invalid ways are used before eviction", $time());
+        apply_reset();
+        set_value = test_set(0);
+
+        for(int way = 0; way < WAYS; way++) begin
+            tags[way] = test_tag(100 + way);
+        end
+
+        for(int way = 0; way < WAYS; way++) begin
+            req_addr = make_addr(tags[way], set_value);
+            check_read(req_addr, 1'b0, $sformatf("fill invalid way %0d", way));
+
+            for(int prev = 0; prev <= way; prev++) begin
+                req_addr = make_addr(tags[prev], set_value);
+                check_read(req_addr, 1'b1, $sformatf("filled way %0d remains valid", prev));
+            end
+        end
+    endtask
+
+    task automatic check_lru_replacement();
+        tag_t     tags [0 : WAYS];
+        tag_t     evicted_tag;
+        set_idx_t set_value;
+        addr_t    req_addr;
+
+        $display("\n[%0t] CHECK: exact LRU replacement", $time());
+        apply_reset();
+        set_value = test_set(0);
+
+        for(int way = 0; way <= WAYS; way++) begin
+            tags[way] = test_tag(200 + way);
+        end
+
+        for(int way = 0; way < WAYS; way++) begin
+            req_addr = make_addr(tags[way], set_value);
+            check_read(req_addr, 1'b0, $sformatf("LRU fill way %0d", way));
+        end
+
+        req_addr = make_addr(tags[0], set_value);
+        check_read(req_addr, 1'b1, "make tag0 most-recently-used");
+
+        req_addr = make_addr(tags[WAYS], set_value);
+        check_read(req_addr, 1'b0, "insert new tag and evict LRU");
+        check_read(req_addr, 1'b1, "new tag remains cached");
+
+        if(WAYS == 1) begin
+            evicted_tag = tags[0];
+        end else begin
+            evicted_tag = tags[1];
+        end
+
+        req_addr = make_addr(evicted_tag, set_value);
+        check_read(req_addr, 1'b0, "previous LRU tag was evicted");
+    endtask
+
+    task automatic check_output_backpressure();
+        addr_t req_addr;
+        logic  hit_rec;
+        data_t data_rec;
+        logic  hit_hold;
+        data_t data_hold;
+        int unsigned req_cnt_before;
+
+        $display("\n[%0t] CHECK: output backpressure holds response stable", $time());
+        apply_reset();
+        req_addr = make_addr(test_tag(300), test_set(0));
+
+        check_read(req_addr, 1'b0, "prefill for backpressure hit");
+
+        @(negedge cache_vif_h.clk);
+        cache_vif_h.m_ready <= 1'b0;
+        req_cnt_before = ext_mem_req_cnt;
+
+        send_read_request(req_addr);
+        wait_for_response(hit_rec, data_rec, RESPONSE_TIMEOUT, 1'b0);
+
+        if(hit_rec !== 1'b1) begin
+            report_error("Backpressure request must hit in cache");
+        end
+        if(data_rec !== ext_mem_data_for_addr(req_addr)) begin
+            report_error("Backpressure response has wrong data");
+        end
+
+        hit_hold  = hit_rec;
+        data_hold = data_rec;
+
+        repeat(3) begin
+            @(posedge cache_vif_h.clk);
+            @(negedge cache_vif_h.clk);
+            if(cache_vif_h.m_valid !== 1'b1) begin
+                report_error("m_valid_o dropped while m_ready_i is low");
+            end
+            if(cache_vif_h.hit !== hit_hold || cache_vif_h.data !== data_hold) begin
+                report_error("Response changed while m_ready_i is low");
+            end
+            if(cache_vif_h.s_ready !== 1'b0) begin
+                report_error("s_ready_o is high while output response is backpressured");
+            end
+        end
+
+        @(negedge cache_vif_h.clk);
+        cache_vif_h.m_ready <= 1'b1;
+        @(posedge cache_vif_h.clk);
+        @(negedge cache_vif_h.clk);
+
+        if(cache_vif_h.m_valid !== 1'b0) begin
+            report_error("m_valid_o did not clear after m_ready_i became high");
+        end
+        if((ext_mem_req_cnt - req_cnt_before) != 0) begin
+            report_error("Backpressured hit must not request external memory");
+        end
+
+        wait_for_s_ready(RESPONSE_TIMEOUT);
+    endtask
+
+    task automatic ext_mem_model_proc();
+        addr_t pending_addr;
+
+        forever begin
+            @(posedge cache_vif_h.clk);
+            cache_vif_h.ext_mem_ack <= 1'b0;
+
+            if(cache_vif_h.rstn && cache_vif_h.ext_mem_req) begin
+                pending_addr = cache_vif_h.ext_mem_addr;
+
+                for(int wait_cycle = 0; wait_cycle < ext_mem_delay; wait_cycle++) begin
+                    @(posedge cache_vif_h.clk);
+                    cache_vif_h.ext_mem_ack <= 1'b0;
+                end
+
+                cache_vif_h.ext_mem_data <= ext_mem_data_for_addr(pending_addr);
+                cache_vif_h.ext_mem_ack  <= 1'b1;
+
+                @(posedge cache_vif_h.clk);
+                cache_vif_h.ext_mem_ack <= 1'b0;
+            end
+        end
+    endtask
+
+    always @(posedge cache_if_h.clk) begin : ext_mem_req_monitor
+        if(!cache_if_h.rstn) begin
+            ext_mem_req_prev <= 1'b0;
+        end else begin
+            if(cache_if_h.ext_mem_req) begin
+                ext_mem_req_cnt++;
+                if(ext_mem_req_prev) begin
+                    report_error("ext_mem_req_o is wider than one cycle");
+                end
+            end
+            ext_mem_req_prev <= cache_if_h.ext_mem_req;
+        end
+    end
 
     initial begin : main_tb_proc
-        // Connect interface
         cache_vif_h = cache_if_h;
 
-        cache_vif_h.addr <= 0;
-        cache_vif_h.addr <= 0;
-        cache_vif_h.m_ready <= 1'b1; // Testbench is always ready to receive data
-        cache_vif_h.s_valid <= 1'b1; // Testbench always sends valid address
+        rstn                     = 1'b0;
+        cache_vif_h.s_valid      = 1'b0;
+        cache_vif_h.addr         = '0;
+        cache_vif_h.m_ready      = 1'b1;
+        cache_vif_h.ext_mem_ack  = 1'b0;
+        cache_vif_h.ext_mem_data = '0;
 
-        // Generate cache initialization file
-        mem_list_gen_h = new();
-        assert(mem_list_gen_h.generate_file(cache_ini_file, "%h", 85));
-        mem_list_gen_h.get_generated_cells(expected_valids, expected_cells);
+        fork
+            ext_mem_model_proc();
+        join_none
 
-        // Initialize cache memory
-        $readmemh(cache_ini_file, u_cache_top.u_cache_sram.sram);
-        u_cache_top.u_cache_ctrl.sram_valids_ff = expected_valids;
+        check_first_miss_then_hit();
+        check_delayed_miss_stall();
+        check_invalid_first_replacement();
+        check_lru_replacement();
+        check_output_backpressure();
 
-        // Wait for reset done
-        @(negedge cache_vif_h.rstn);
-        @(posedge cache_vif_h.rstn);
-        repeat(2) @(posedge cache_vif_h.clk);
+        repeat(10) @(posedge cache_vif_h.clk);
 
-        // Start checks
-        check_cache_hit();
-        check_cache_miss();
-
-        // Some drain time
-        repeat(10)
-            @(posedge cache_vif_h.clk);
-
-        if(error_cnt)
+        if(error_cnt) begin
             $display("\n\t\tTEST FAILED! (error counter = %0d)\n", error_cnt);
-        else
+        end else begin
             $display("\n\t\tTEST PASSED!\n");
+        end
         $finish();
     end
 
-    initial begin : reset_gen_proc
-        reset_gen();
-    end
-
     initial begin : clk_gen_proc
-        clk <= 1'b0;
+        clk = 1'b0;
         forever begin
             #(CLK_PERIOD / 2.0) clk = ~clk;
         end
     end
 
 endmodule : tb_cache
-

@@ -9,7 +9,7 @@ interface cache_if # (
     logic                      s_valid;
     logic                      s_ready;
 
-    // Master request signals
+    // Master response signals
     logic                      m_valid;
     logic                      m_ready;
 
@@ -17,12 +17,6 @@ interface cache_if # (
     logic [DATA_WIDTH - 1 : 0] data;
     logic                      hit_valid;
     logic                      hit;
-
-    logic                      sram_ce;
-    logic                      sram_we;
-    logic [ADDR_WIDTH - 1 : 0] sram_addr;
-    logic [CELL_WIDTH - 1 : 0] sram_wdata;
-    logic [CELL_WIDTH - 1 : 0] sram_rdata;
 
     logic                      ext_mem_req;
     logic [ADDR_WIDTH - 1 : 0] ext_mem_addr;
