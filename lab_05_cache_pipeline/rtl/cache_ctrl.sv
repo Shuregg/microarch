@@ -202,10 +202,14 @@ module cache_ctrl #(
     logic s2_stall;
     logic s1_stall;
     logic s0_same_set_hazard;
+    logic s0_s2_set_hazard;
     logic s0_stall;
     logic s0_advancing;
     logic s1_advancing;
     logic s2_advancing;
+
+    // Set index derived from s2_addr for the S2-vs-S0 hazard check
+    logic [SET_FIELD_WIDTH - 1 : 0] s2_set;
 
     // ------------------------------------------------------------------------
     // -- SRAM data views
@@ -213,6 +217,7 @@ module cache_ctrl #(
 
     assign s1_cache_cell = cache_sram_rdata_i;
     assign s1_state_cell = state_sram_a_rdata_i;
+    assign s2_set        = (SETS != 1) ? s2_addr[SET_FIELD_WIDTH - 1 : 0] : '0;
 
     // ------------------------------------------------------------------------
     // -- Stall / advance logic
@@ -223,13 +228,19 @@ module cache_ctrl #(
         s2_stall = s3_stall || (s2_valid && s2_is_miss && !ext_mem_ack_i);
         s1_stall = s2_stall;
 
-        // S1 writes state SRAM Port B in the same cycle it advances.
+        // S1 writes state SRAM Port B when it advances on a hit.
         // S0 must not read the same set in that cycle (read-first SRAM → stale data).
         s0_same_set_hazard = s0_valid && s1_valid && !s1_is_miss &&
                              !s2_stall &&
                              (s0_set == s1_set);
 
-        s0_stall     = init_active || s1_stall || s0_same_set_hazard;
+        // S2 writes state SRAM Port B on ext_mem_ack (miss LRU update).
+        // When ack arrives s2_stall drops to 0 in the same cycle, unblocking S0.
+        // If S0 reads the same set it gets the pre-refill state (victim still invalid).
+        s0_s2_set_hazard   = s0_valid && s2_valid && s2_is_miss && ext_mem_ack_i &&
+                             (s0_set == s2_set);
+
+        s0_stall     = init_active || s1_stall || s0_same_set_hazard || s0_s2_set_hazard;
         s0_advancing = s0_valid && !s0_stall;
         s1_advancing = s1_valid && !s1_stall;
         s2_advancing = s2_valid && !s3_stall && (!s2_is_miss || ext_mem_ack_i);
