@@ -8,6 +8,11 @@ module tb_cache();
     parameter int RESPONSE_TIMEOUT     = 200;
     parameter int DEFAULT_EXT_MEM_WAIT = 3;
 
+    // Number of back-to-back requests in the throughput test.
+    // Addresses cycle through sets (i % SETS), so adjacent requests go to
+    // different sets when SETS > 1 — no s0_same_set_hazard — giving 1 hit/cycle.
+    localparam int BURST_LEN = (SETS > 1) ? SETS * 2 : 2;
+
     typedef logic [ADDR_WIDTH - 1 : 0] addr_t;
     typedef logic [DATA_WIDTH - 1 : 0] data_t;
     typedef logic [TAG_WIDTH  - 1 : 0] tag_t;
@@ -405,6 +410,84 @@ module tb_cache();
         wait_for_s_ready(RESPONSE_TIMEOUT);
     endtask
 
+    task automatic check_pipeline_throughput();
+        addr_t burst_addrs [BURST_LEN];
+        logic  got_hit;
+        data_t got_data;
+
+        $display("\n[%0t] CHECK: pipeline throughput (back-to-back hits, BURST_LEN=%0d)",
+            $time(), BURST_LEN);
+        apply_reset();
+
+        // Build addresses: set index cycles (i % SETS) so adjacent requests
+        // target different sets → no s0_same_set_hazard when SETS > 1.
+        for (int i = 0; i < BURST_LEN; i++)
+            burst_addrs[i] = make_addr(test_tag(400 + i % SETS), test_set(i % SETS));
+
+        // Phase 1: sequential pre-fill so every address is in cache
+        for (int i = 0; i < BURST_LEN; i++)
+            check_read(burst_addrs[i], 1'b0, $sformatf("throughput prefill [%0d]", i));
+
+        // Phase 2: burst send — keep s_valid=1, change addr each accepted cycle.
+        // This puts BURST_LEN requests into the pipeline without waiting for responses.
+        @(negedge cache_vif_h.clk);
+        for (int i = 0; i < BURST_LEN; i++) begin
+            cache_vif_h.addr    <= burst_addrs[i];
+            cache_vif_h.s_valid <= 1'b1;
+            // Wait at negedge until s_ready (combinatorial — already settled here)
+            while (cache_vif_h.s_ready !== 1'b1)
+                @(negedge cache_vif_h.clk);
+            @(posedge cache_vif_h.clk);         // handshake posedge
+            if (i < BURST_LEN - 1)
+                @(negedge cache_vif_h.clk);     // align for next address
+        end
+        @(negedge cache_vif_h.clk);
+        cache_vif_h.s_valid <= 1'b0;
+
+        // Phase 3: collect all BURST_LEN responses.
+        //
+        // First response: arrived after 3-cycle hit latency; wait normally.
+        // After wait_for_response consumes it (at the consume posedge), the
+        // pipeline loads the next result into S3 in the same posedge.
+        // All subsequent responses are read at the following negedge.
+        //
+        // Expected timing for SETS > 1 (no same-set stalls):
+        //   gap between consecutive m_valid pulses = 1 cycle exactly.
+
+        wait_for_response(got_hit, got_data, RESPONSE_TIMEOUT, 1'b1);
+        if (got_hit !== 1'b1)
+            report_error("Throughput [0]: expected hit");
+        if (got_data !== ext_mem_data_for_addr(burst_addrs[0]))
+            report_error("Throughput [0]: wrong data");
+
+        for (int i = 1; i < BURST_LEN; i++) begin
+            // The consume posedge of the previous iteration loaded the next result
+            // into S3 simultaneously. It is valid at this negedge.
+            @(negedge cache_vif_h.clk);
+
+            if (SETS > 1 && cache_vif_h.m_valid !== 1'b1)
+                report_error($sformatf(
+                    "Throughput [%0d]: pipeline gap — m_valid=0 between consecutive hits", i));
+
+            if (cache_vif_h.m_valid === 1'b1) begin
+                got_hit  = cache_vif_h.hit;
+                got_data = cache_vif_h.data;
+                if (got_hit !== 1'b1)
+                    report_error($sformatf("Throughput [%0d]: expected hit", i));
+                if (got_data !== ext_mem_data_for_addr(burst_addrs[i]))
+                    report_error($sformatf("Throughput [%0d]: wrong data", i));
+                @(posedge cache_vif_h.clk);     // consume; next result loads into S3
+            end else begin
+                // SETS = 1: same-set hazard inserts a stall cycle. Just wait.
+                wait_for_response(got_hit, got_data, RESPONSE_TIMEOUT, 1'b1);
+                if (got_hit !== 1'b1)
+                    report_error($sformatf("Throughput [%0d]: expected hit (SETS=1)", i));
+                if (got_data !== ext_mem_data_for_addr(burst_addrs[i]))
+                    report_error($sformatf("Throughput [%0d]: wrong data (SETS=1)", i));
+            end
+        end
+    endtask
+
     task automatic ext_mem_model_proc();
         addr_t pending_addr;
 
@@ -462,6 +545,7 @@ module tb_cache();
         check_invalid_first_replacement();
         check_lru_replacement();
         check_output_backpressure();
+        check_pipeline_throughput();
 
         repeat(10) @(posedge cache_vif_h.clk);
 
