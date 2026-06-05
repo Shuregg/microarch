@@ -9,9 +9,11 @@ module tb_cache();
     parameter int DEFAULT_EXT_MEM_WAIT = 3;
 
     // Number of back-to-back requests in the throughput test.
-    // Addresses cycle through sets (i % SETS), so adjacent requests go to
-    // different sets when SETS > 1 — no s0_same_set_hazard — giving 1 hit/cycle.
-    localparam int BURST_LEN = (SETS > 1) ? SETS * 2 : 2;
+    // For SETS > 1: use full cache capacity (SETS * WAYS) so all burst addresses
+    // fit simultaneously. Addresses cycle sets (i % SETS) with unique tags → no
+    // s0_same_set_hazard between adjacent requests → 1 hit/cycle throughput.
+    // For SETS = 1: same-set hazard is unavoidable; use 2 requests for correctness.
+    localparam int BURST_LEN = (SETS > 1) ? SETS * WAYS : 2;
 
     typedef logic [ADDR_WIDTH - 1 : 0] addr_t;
     typedef logic [DATA_WIDTH - 1 : 0] data_t;
@@ -421,8 +423,10 @@ module tb_cache();
 
         // Build addresses: set index cycles (i % SETS) so adjacent requests
         // target different sets → no s0_same_set_hazard when SETS > 1.
+        // Each address has a UNIQUE tag to avoid collisions between iterations.
+        // set cycles as (i % SETS): adjacent requests go to different sets (SETS > 1).
         for (int i = 0; i < BURST_LEN; i++)
-            burst_addrs[i] = make_addr(test_tag(400 + i % SETS), test_set(i % SETS));
+            burst_addrs[i] = make_addr(test_tag(400 + i), test_set(i % SETS));
 
         // Phase 1: sequential pre-fill so every address is in cache
         for (int i = 0; i < BURST_LEN; i++)
