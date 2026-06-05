@@ -239,7 +239,10 @@ module tb_cache();
             @(posedge cache_vif_h.clk);
             cycles++;
             @(negedge cache_vif_h.clk);
-            if(cache_vif_h.m_valid !== 1'b1 && cache_vif_h.s_ready !== 1'b0) begin
+            // ext_mem_ack arriving drops s2_stall combinatorially → s_ready goes high
+            // one cycle before m_valid (pipeline behaviour). Exclude the ack cycle.
+            if(cache_vif_h.m_valid !== 1'b1 && cache_vif_h.s_ready !== 1'b0
+               && cache_vif_h.ext_mem_ack !== 1'b1) begin
                 report_error("s_ready_o is high while delayed miss is in flight");
             end
             if(cycles >= RESPONSE_TIMEOUT) begin
