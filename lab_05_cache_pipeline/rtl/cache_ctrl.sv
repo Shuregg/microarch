@@ -201,8 +201,9 @@ module cache_ctrl #(
     logic s3_stall;
     logic s2_stall;
     logic s1_stall;
-    logic s0_same_set_hazard;
-    logic s0_s2_set_hazard;
+    logic s0_hit_line_hazard;     // S1 hit writes state[set]; S0 reads same line
+    logic s0_miss_set_hazard;     // in-flight miss owns set; hold follower in S0
+    logic s0_refill_struct_hazard;// refill monopolizes single cache-SRAM port
     logic s0_stall;
     logic s0_advancing;
     logic s1_advancing;
@@ -228,19 +229,33 @@ module cache_ctrl #(
         s2_stall = s3_stall || (s2_valid && s2_is_miss && !ext_mem_ack_i);
         s1_stall = s2_stall;
 
-        // S1 writes state SRAM Port B when it advances on a hit.
-        // S0 must not read the same set in that cycle (read-first SRAM → stale data).
-        s0_same_set_hazard = s0_valid && s1_valid && !s1_is_miss &&
-                             !s2_stall &&
-                             (s0_set == s1_set);
+        // Hazard 1 (same-line hit). On a hit S1 writes state SRAM Port B (LRU) for
+        // its set. With read-first Port A, S0 reading that location in the same cycle
+        // would consume a stale snapshot. Narrowed to the full line (tag+set): only a
+        // request to the same line is held; different-tag/same-set requests proceed.
+        // (Trade-off: their LRU ages may be computed from a one-cycle-stale base.)
+        s0_hit_line_hazard = s0_valid && s1_valid && !s1_is_miss && !s2_stall &&
+                             (s0_addr == s1_addr);
 
-        // S2 writes state SRAM Port B on ext_mem_ack (miss LRU update).
-        // When ack arrives s2_stall drops to 0 in the same cycle, unblocking S0.
-        // If S0 reads the same set it gets the pre-refill state (victim still invalid).
-        s0_s2_set_hazard   = s0_valid && s2_valid && s2_is_miss && ext_mem_ack_i &&
-                             (s0_set == s2_set);
+        // Hazard 2 (in-flight miss owns the set). A miss being resolved (detected in
+        // S1, or waiting/refilling in S2) will rewrite state[set] from a snapshot
+        // taken before the refill. Any follower to the SAME SET must wait in S0 so
+        // that, once the refill is visible, it re-reads fresh cache + state:
+        //   * same line -> now a hit (no duplicate allocation, no 2nd ext_mem_req);
+        //   * same set  -> sees post-refill valid/LRU (no state corruption).
+        // Set granularity is required (state is per-set) and costs no throughput: a
+        // miss blocks the pipe regardless of whether the follower waits in S0 or S1.
+        s0_miss_set_hazard = s0_valid &&
+                             ((s1_valid && s1_is_miss && (s0_set == s1_set)) ||
+                              (s2_valid && s2_is_miss && (s0_set == s2_set)));
 
-        s0_stall     = init_active || s1_stall || s0_same_set_hazard || s0_s2_set_hazard;
+        // Hazard 3 (structural). On the refill (ack) cycle the single-port cache SRAM
+        // is busy with the refill write, so S0 cannot perform its read this cycle —
+        // regardless of set. Hold S0 for that one cycle; it reads next cycle.
+        s0_refill_struct_hazard = s0_valid && s2_valid && s2_is_miss && ext_mem_ack_i;
+
+        s0_stall     = init_active || s1_stall ||
+                       s0_hit_line_hazard || s0_miss_set_hazard || s0_refill_struct_hazard;
         s0_advancing = s0_valid && !s0_stall;
         s1_advancing = s1_valid && !s1_stall;
         s2_advancing = s2_valid && !s3_stall && (!s2_is_miss || ext_mem_ack_i);
